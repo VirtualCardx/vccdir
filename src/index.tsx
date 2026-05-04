@@ -536,6 +536,57 @@ app.get('/card/:slug', async (c) => {
 });
 
 // ==========================================
+// Sitemap.xml
+// ==========================================
+app.get('/sitemap.xml', async (c) => {
+  const db = c.env.DB;
+  const origin = new URL(c.req.url).origin;
+
+  const [providers, cards] = await Promise.all([
+    db.prepare('SELECT slug, updated_at FROM vcc_providers WHERE status = ? ORDER BY updated_at DESC').bind('active').all<{ slug: string; updated_at: string }>(),
+    db.prepare('SELECT c.slug, c.created_at FROM vcc_cards c WHERE c.status = ? ORDER BY c.created_at DESC').bind('active').all<{ slug: string; created_at: string }>(),
+  ]);
+
+  const urls: string[] = [];
+
+  // Homepage
+  urls.push(`  <url>
+    <loc>${origin}/</loc>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>`);
+
+  // Provider pages
+  for (const p of providers.results) {
+    const lastmod = p.updated_at ? `\n    <lastmod>${p.updated_at.split(' ')[0]}</lastmod>` : '';
+    urls.push(`  <url>
+    <loc>${origin}/provider/${p.slug}</loc>${lastmod}
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>`);
+  }
+
+  // Card pages
+  for (const card of cards.results) {
+    const lastmod = card.created_at ? `\n    <lastmod>${card.created_at.split(' ')[0]}</lastmod>` : '';
+    urls.push(`  <url>
+    <loc>${origin}/card/${card.slug}</loc>${lastmod}
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>`);
+  }
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls.join('\n')}
+</urlset>`;
+
+  return new Response(xml, {
+    headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' },
+  });
+});
+
+// ==========================================
 // Login
 // ==========================================
 app.get('/login', (c) => {

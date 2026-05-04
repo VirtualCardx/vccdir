@@ -75,6 +75,14 @@ const translations = {
   'admin.upload_logo': { zh: '上传Logo', en: 'Upload Logo' },
   'admin.select_provider': { zh: '选择平台', en: 'Select Platform' },
   'admin.manage_tags': { zh: '标签管理', en: 'Manage Tags' },
+  'admin.change_password': { zh: '修改密码', en: 'Change Password' },
+  'admin.old_password': { zh: '当前密码', en: 'Current Password' },
+  'admin.new_password': { zh: '新密码', en: 'New Password' },
+  'admin.confirm_password': { zh: '确认新密码', en: 'Confirm New Password' },
+  'admin.password_changed': { zh: '密码修改成功', en: 'Password changed successfully' },
+  'admin.password_error_old': { zh: '当前密码不正确', en: 'Current password is incorrect' },
+  'admin.password_error_mismatch': { zh: '两次输入的新密码不一致', en: 'New passwords do not match' },
+  'admin.password_error_short': { zh: '新密码至少需要6个字符', en: 'New password must be at least 6 characters' },
 
   // Login
   'login.title': { zh: '管理员登录', en: 'Admin Login' },
@@ -103,8 +111,7 @@ export function t(key: string, lang: Lang): string {
   return entry[lang] || key;
 }
 
-export function getLang(cookie: string | undefined): Lang {
-  if (!cookie) return 'zh';
-  const match = cookie.match(/lang=(zh|en)/);
-  return (match?.[1] as Lang) || 'zh';
+export function getLang(value: string | undefined): Lang {
+  if (value === 'en') return 'en';
+  return 'zh';
 }

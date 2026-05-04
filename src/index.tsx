@@ -618,7 +618,12 @@ app.get('/admin', async (c) => {
   return c.html(
     <Layout title={t('admin.title', lang)} lang={lang} isAdmin={true}>
       <div class="max-w-7xl mx-auto px-4 py-8">
-        <h1 class="text-2xl font-bold text-gray-900 mb-8">{t('admin.title', lang)}</h1>
+        <div class="flex items-center justify-between mb-8">
+          <h1 class="text-2xl font-bold text-gray-900">{t('admin.title', lang)}</h1>
+          <a href="/admin/password" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors">
+            {t('admin.change_password', lang)}
+          </a>
+        </div>
 
         {/* Providers Section */}
         <div class="mb-12">
@@ -718,6 +723,97 @@ app.get('/admin', async (c) => {
       </div>
     </Layout>
   );
+});
+
+// ==========================================
+// Admin: Change Password
+// ==========================================
+app.get('/admin/password', (c) => {
+  const lang = getLang(getCookie(c, 'lang'));
+  const success = c.req.query('success');
+  const error = c.req.query('error');
+
+  return c.html(
+    <Layout title={t('admin.change_password', lang)} lang={lang} isAdmin={true}>
+      <div class="max-w-lg mx-auto px-4 py-8">
+        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.change_password', lang)}</h1>
+        {success && (
+          <div class="bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 mb-6 text-sm">
+            {t('admin.password_changed', lang)}
+          </div>
+        )}
+        {error === 'old' && (
+          <div class="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 mb-6 text-sm">
+            {t('admin.password_error_old', lang)}
+          </div>
+        )}
+        {error === 'mismatch' && (
+          <div class="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 mb-6 text-sm">
+            {t('admin.password_error_mismatch', lang)}
+          </div>
+        )}
+        {error === 'short' && (
+          <div class="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 mb-6 text-sm">
+            {t('admin.password_error_short', lang)}
+          </div>
+        )}
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <form method="post" action="/admin/password" class="space-y-5">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.old_password', lang)} *</label>
+              <input type="password" name="old_password" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.new_password', lang)} *</label>
+              <input type="password" name="new_password" required minLength={6} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.confirm_password', lang)} *</label>
+              <input type="password" name="confirm_password" required minLength={6} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
+            </div>
+            <div class="flex space-x-4">
+              <button type="submit" class="px-6 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors">
+                {t('admin.save', lang)}
+              </button>
+              <a href="/admin" class="px-6 py-2.5 bg-gray-100 text-gray-600 rounded-lg font-medium hover:bg-gray-200 transition-colors">
+                {t('admin.cancel', lang)}
+              </a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </Layout>
+  );
+});
+
+app.post('/admin/password', async (c) => {
+  const db = c.env.DB;
+  const body = await c.req.parseBody();
+  const oldPassword = String(body['old_password'] || '');
+  const newPassword = String(body['new_password'] || '');
+  const confirmPassword = String(body['confirm_password'] || '');
+
+  if (newPassword.length < 6) {
+    return c.redirect('/admin/password?error=short');
+  }
+
+  if (newPassword !== confirmPassword) {
+    return c.redirect('/admin/password?error=mismatch');
+  }
+
+  // Verify old password against the first admin user (current session)
+  const oldHash = await sha256(oldPassword);
+  const user = await db.prepare('SELECT id FROM admin_users WHERE password_hash = ?').bind(oldHash).first<{ id: number }>();
+
+  if (!user) {
+    return c.redirect('/admin/password?error=old');
+  }
+
+  // Update password
+  const newHash = await sha256(newPassword);
+  await db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?').bind(newHash, user.id).run();
+
+  return c.redirect('/admin/password?success=1');
 });
 
 // ==========================================

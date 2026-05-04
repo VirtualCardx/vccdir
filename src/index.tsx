@@ -33,6 +33,10 @@ function tagName(tag: Tag, lang: Lang): string {
   return lang === 'zh' ? tag.name_zh : tag.name_en;
 }
 
+function generateSlug(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
 // ==========================================
 // Language Switch
 // ==========================================
@@ -130,7 +134,7 @@ app.get('/', async (c) => {
         '@type': 'FinancialProduct',
         name: providerName(p, 'en'),
         description: p.desc_en || p.desc_zh,
-        url: `/provider/${p.id}`,
+        url: `/provider/${p.slug}`,
         provider: { '@type': 'Organization', name: p.name_en },
       },
     })),
@@ -207,7 +211,7 @@ app.get('/', async (c) => {
         ) : (
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {providersWithTags.map((p) => (
-              <a href={`/provider/${p.id}`} class="card-hover block bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+              <a href={`/provider/${p.slug}`} class="card-hover block bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                 <div class="p-6">
                   <div class="flex items-center space-x-3 mb-3">
                     {p.logo_url ? (
@@ -247,13 +251,13 @@ app.get('/', async (c) => {
 // ==========================================
 // Provider Detail
 // ==========================================
-app.get('/provider/:id', async (c) => {
+app.get('/provider/:slug', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
   const admin = isLoggedIn(c);
-  const id = c.req.param('id');
+  const slug = c.req.param('slug');
 
-  const provider = await db.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(id).first<Provider>();
+  const provider = await db.prepare('SELECT * FROM vcc_providers WHERE slug = ?').bind(slug).first<Provider>();
   if (!provider) {
     return c.html(
       <Layout title={t('provider.not_found', lang)} lang={lang} isAdmin={admin}>
@@ -267,8 +271,8 @@ app.get('/provider/:id', async (c) => {
   }
 
   const [cards, providerTags] = await Promise.all([
-    db.prepare('SELECT * FROM vcc_cards WHERE provider_id = ? AND status = ? ORDER BY issuance_fee ASC').bind(id, 'active').all<Card>(),
-    db.prepare('SELECT t.* FROM vcc_tags t INNER JOIN vcc_provider_tags pt ON t.id = pt.tag_id WHERE pt.provider_id = ?').bind(id).all<Tag>(),
+    db.prepare('SELECT * FROM vcc_cards WHERE provider_id = ? AND status = ? ORDER BY issuance_fee ASC').bind(provider.id, 'active').all<Card>(),
+    db.prepare('SELECT t.* FROM vcc_tags t INNER JOIN vcc_provider_tags pt ON t.id = pt.tag_id WHERE pt.provider_id = ?').bind(provider.id).all<Tag>(),
   ]);
 
   const jsonLd = {
@@ -367,7 +371,7 @@ app.get('/provider/:id', async (c) => {
         ) : (
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             {cards.results.map((card) => (
-              <a href={`/card/${card.id}`} class="card-hover block bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+              <a href={`/card/${card.slug}`} class="card-hover block bg-white rounded-xl shadow-sm border border-gray-100 p-5">
                 <div class="flex items-center justify-between mb-3">
                   <div class="flex items-center space-x-2">
                     <span class={`px-2 py-0.5 rounded text-xs font-bold ${card.card_type === 'Visa' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
@@ -414,15 +418,15 @@ app.get('/provider/:id', async (c) => {
 // ==========================================
 // Card Detail
 // ==========================================
-app.get('/card/:id', async (c) => {
+app.get('/card/:slug', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
   const admin = isLoggedIn(c);
-  const id = c.req.param('id');
+  const slug = c.req.param('slug');
 
   const card = await db.prepare(
-    'SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id WHERE c.id = ?'
-  ).bind(id).first<CardWithProvider>();
+    'SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en, p.slug as provider_slug FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id WHERE c.slug = ?'
+  ).bind(slug).first<CardWithProvider>();
 
   if (!card) {
     return c.html(
@@ -457,7 +461,7 @@ app.get('/card/:id', async (c) => {
         <nav class="mb-6 text-sm text-gray-500">
           <a href="/" class="hover:text-brand-600">{t('nav.home', lang)}</a>
           <span class="mx-2">/</span>
-          <a href={`/provider/${card.provider_id}`} class="hover:text-brand-600">{pName}</a>
+          <a href={`/provider/${card.provider_slug}`} class="hover:text-brand-600">{pName}</a>
           <span class="mx-2">/</span>
           <span class="text-gray-900">{card.bin}</span>
         </nav>
@@ -496,7 +500,7 @@ app.get('/card/:id', async (c) => {
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-gray-100 pt-6">
             <div>
               <div class="text-xs text-gray-400 mb-1">{t('card.provider', lang)}</div>
-              <a href={`/provider/${card.provider_id}`} class="text-brand-600 hover:underline font-medium">{pName}</a>
+              <a href={`/provider/${card.provider_slug}`} class="text-brand-600 hover:underline font-medium">{pName}</a>
             </div>
             <div>
               <div class="text-xs text-gray-400 mb-1">{t('card.currency', lang)}</div>
@@ -524,7 +528,7 @@ app.get('/card/:id', async (c) => {
         </div>
 
         <div class="mt-6">
-          <a href={`/provider/${card.provider_id}`} class="text-brand-600 hover:underline text-sm">&larr; {t('card.back_provider', lang)}</a>
+          <a href={`/provider/${card.provider_slug}`} class="text-brand-600 hover:underline text-sm">&larr; {t('card.back_provider', lang)}</a>
         </div>
       </div>
     </Layout>
@@ -612,7 +616,7 @@ app.get('/admin', async (c) => {
 
   const [providers, cards] = await Promise.all([
     db.prepare('SELECT * FROM vcc_providers ORDER BY updated_at DESC').all<Provider>(),
-    db.prepare('SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id ORDER BY c.created_at DESC').all<CardWithProvider>(),
+    db.prepare('SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en, p.slug as provider_slug FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id ORDER BY c.created_at DESC').all<CardWithProvider>(),
   ]);
 
   return c.html(
@@ -639,6 +643,7 @@ app.get('/admin', async (c) => {
                 <thead class="bg-gray-50 border-b border-gray-200">
                   <tr>
                     <th class="text-left px-4 py-3 font-medium text-gray-500">ID</th>
+                    <th class="text-left px-4 py-3 font-medium text-gray-500">Slug</th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500">{lang === 'zh' ? '中文名' : 'Chinese Name'}</th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500">{lang === 'zh' ? '英文名' : 'English Name'}</th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500">{t('provider.region', lang)}</th>
@@ -650,6 +655,7 @@ app.get('/admin', async (c) => {
                   {providers.results.map((p) => (
                     <tr class="hover:bg-gray-50">
                       <td class="px-4 py-3 text-gray-500">{p.id}</td>
+                      <td class="px-4 py-3 font-mono text-xs text-gray-500">{p.slug}</td>
                       <td class="px-4 py-3 font-medium text-gray-900">{p.name_zh}</td>
                       <td class="px-4 py-3 text-gray-700">{p.name_en}</td>
                       <td class="px-4 py-3 text-gray-500">{p.region || '-'}</td>
@@ -684,6 +690,7 @@ app.get('/admin', async (c) => {
                 <thead class="bg-gray-50 border-b border-gray-200">
                   <tr>
                     <th class="text-left px-4 py-3 font-medium text-gray-500">ID</th>
+                    <th class="text-left px-4 py-3 font-medium text-gray-500">Slug</th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500">{t('card.provider', lang)}</th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500">BIN</th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500">{t('card.type', lang)}</th>
@@ -698,6 +705,7 @@ app.get('/admin', async (c) => {
                   {cards.results.map((card) => (
                     <tr class="hover:bg-gray-50">
                       <td class="px-4 py-3 text-gray-500">{card.id}</td>
+                      <td class="px-4 py-3 font-mono text-xs text-gray-500">{card.slug}</td>
                       <td class="px-4 py-3 text-gray-700">{lang === 'zh' ? card.provider_name_zh : card.provider_name_en}</td>
                       <td class="px-4 py-3 font-mono font-medium text-gray-900">{card.bin}</td>
                       <td class="px-4 py-3">
@@ -840,6 +848,10 @@ function ProviderForm({ provider, tags, selectedTags, lang, action }: {
           <input type="text" name="name_en" required value={provider?.name_en || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
         </div>
         <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Slug</label>
+          <input type="text" name="slug" value={provider?.slug || ''} placeholder={lang === 'zh' ? '留空自动生成' : 'Leave empty to auto-generate'} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none font-mono text-sm" />
+        </div>
+        <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">{t('provider.website', lang)}</label>
           <input type="url" name="website" value={provider?.website || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
         </div>
@@ -940,12 +952,14 @@ app.post('/admin/provider/new', async (c) => {
     }
   }
 
+  const slug = String(body['slug'] || '') || generateSlug(String(body['name_en'] || ''));
+
   const result = await db.prepare(
-    'INSERT INTO vcc_providers (name_zh, name_en, website, founded_date, apply_method, desc_zh, desc_en, need_kyc, region, status, logo_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO vcc_providers (name_zh, name_en, website, founded_date, apply_method, desc_zh, desc_en, need_kyc, region, status, logo_url, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
     body['name_zh'], body['name_en'], body['website'] || null, body['founded_date'] || null,
     body['apply_method'] || null, body['desc_zh'] || null, body['desc_en'] || null,
-    Number(body['need_kyc'] || 0), body['region'] || null, body['status'] || 'active', logoUrl
+    Number(body['need_kyc'] || 0), body['region'] || null, body['status'] || 'active', logoUrl, slug
   ).run();
 
   // Handle tags
@@ -1006,12 +1020,14 @@ app.post('/admin/provider/:id/edit', async (c) => {
     }
   }
 
+  const slug = String(body['slug'] || '') || generateSlug(String(body['name_en'] || ''));
+
   await db.prepare(
-    `UPDATE vcc_providers SET name_zh = ?, name_en = ?, website = ?, founded_date = ?, apply_method = ?, desc_zh = ?, desc_en = ?, need_kyc = ?, region = ?, status = ?, updated_at = datetime('now')${logoUpdate} WHERE id = ?`
+    `UPDATE vcc_providers SET name_zh = ?, name_en = ?, website = ?, founded_date = ?, apply_method = ?, desc_zh = ?, desc_en = ?, need_kyc = ?, region = ?, status = ?, slug = ?, updated_at = datetime('now')${logoUpdate} WHERE id = ?`
   ).bind(
     body['name_zh'], body['name_en'], body['website'] || null, body['founded_date'] || null,
     body['apply_method'] || null, body['desc_zh'] || null, body['desc_en'] || null,
-    Number(body['need_kyc'] || 0), body['region'] || null, body['status'] || 'active',
+    Number(body['need_kyc'] || 0), body['region'] || null, body['status'] || 'active', slug,
     ...logoParams, id
   ).run();
 
@@ -1057,6 +1073,10 @@ function CardForm({ card, providers, lang, action }: {
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">BIN *</label>
           <input type="text" name="bin" required value={card?.bin || ''} placeholder="e.g. 556150" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Slug</label>
+          <input type="text" name="slug" value={card?.slug || ''} placeholder={lang === 'zh' ? '留空自动生成' : 'Leave empty to auto-generate'} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none font-mono text-sm" />
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.type', lang)} *</label>
@@ -1138,14 +1158,21 @@ app.post('/admin/card/new', async (c) => {
   const db = c.env.DB;
   const body = await c.req.parseBody();
 
+  // Auto-generate slug from provider slug + BIN if not provided
+  let slug = String(body['slug'] || '');
+  if (!slug) {
+    const provider = await db.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(body['provider_id']).first<{ slug: string }>();
+    slug = `${provider?.slug || 'card'}-${body['bin']}`;
+  }
+
   await db.prepare(
-    'INSERT INTO vcc_cards (provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO vcc_cards (provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
     body['provider_id'], body['bin'], body['card_type'], body['currency'] || 'USD',
     Number(body['issuance_fee'] || 0), Number(body['fee_rate'] || 0),
     Number(body['monthly_fee'] || 0), Number(body['initial_load'] || 0),
     body['quota'] || null, body['usage'] || null, body['description'] || null,
-    body['status'] || 'active'
+    body['status'] || 'active', slug
   ).run();
 
   return c.redirect('/admin');
@@ -1181,14 +1208,21 @@ app.post('/admin/card/:id/edit', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.parseBody();
 
+  // Auto-generate slug from provider slug + BIN if not provided
+  let slug = String(body['slug'] || '');
+  if (!slug) {
+    const provider = await db.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(body['provider_id']).first<{ slug: string }>();
+    slug = `${provider?.slug || 'card'}-${body['bin']}`;
+  }
+
   await db.prepare(
-    'UPDATE vcc_cards SET provider_id = ?, bin = ?, card_type = ?, currency = ?, issuance_fee = ?, fee_rate = ?, monthly_fee = ?, initial_load = ?, quota = ?, usage = ?, description = ?, status = ? WHERE id = ?'
+    'UPDATE vcc_cards SET provider_id = ?, bin = ?, card_type = ?, currency = ?, issuance_fee = ?, fee_rate = ?, monthly_fee = ?, initial_load = ?, quota = ?, usage = ?, description = ?, status = ?, slug = ? WHERE id = ?'
   ).bind(
     body['provider_id'], body['bin'], body['card_type'], body['currency'] || 'USD',
     Number(body['issuance_fee'] || 0), Number(body['fee_rate'] || 0),
     Number(body['monthly_fee'] || 0), Number(body['initial_load'] || 0),
     body['quota'] || null, body['usage'] || null, body['description'] || null,
-    body['status'] || 'active', id
+    body['status'] || 'active', slug, id
   ).run();
 
   return c.redirect('/admin');

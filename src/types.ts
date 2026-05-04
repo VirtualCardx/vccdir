@@ -13,6 +13,7 @@ export interface Provider {
   region: string | null;
   status: string;
   logo_url: string | null;
+  slug: string;
   created_at: string;
   updated_at: string;
 }
@@ -31,12 +32,14 @@ export interface Card {
   usage: string | null;
   description: string | null;
   status: string;
+  slug: string;
   created_at: string;
 }
 
 export interface CardWithProvider extends Card {
   provider_name_zh: string;
   provider_name_en: string;
+  provider_slug: string;
 }
 
 export interface Tag {

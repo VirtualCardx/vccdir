@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS vcc_providers (
   region TEXT,
   status TEXT DEFAULT 'active', -- active / inactive
   logo_url TEXT,
+  slug TEXT NOT NULL UNIQUE,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS vcc_cards (
   usage TEXT,
   description TEXT,
   status TEXT DEFAULT 'active',
+  slug TEXT NOT NULL UNIQUE,
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (provider_id) REFERENCES vcc_providers(id) ON DELETE CASCADE
 );
@@ -82,18 +84,18 @@ INSERT OR IGNORE INTO vcc_tags (id, name_zh, name_en, category) VALUES
 -- ============================================
 -- Seed Data: Sample Provider
 -- ============================================
-INSERT OR IGNORE INTO vcc_providers (id, name_zh, name_en, website, founded_date, apply_method, desc_zh, desc_en, need_kyc, region, status) VALUES
-  (1, 'FomePay', 'FomePay', 'https://www.fomepay.com', '2020-01', '官网注册 / Website Registration', '全球虚拟信用卡平台，支持加密货币充值，快速发卡。', 'Global virtual credit card platform with crypto top-up and instant card issuance.', 0, 'Global', 'active'),
-  (2, 'DuPay', 'DuPay', 'https://www.dupay.one', '2022-06', 'App注册 / App Registration', '支持USDT充值的虚拟卡平台，提供Visa和Mastercard卡段。', 'Virtual card platform supporting USDT top-up, offering Visa and Mastercard BINs.', 1, 'Global', 'active'),
-  (3, 'OneKey Card', 'OneKey Card', 'https://card.onekey.so', '2023-01', '官网注册 / Website Registration', '硬件钱包品牌推出的虚拟卡服务，安全性高。', 'Virtual card service by hardware wallet brand, high security.', 1, 'Global', 'active');
+INSERT OR IGNORE INTO vcc_providers (id, name_zh, name_en, website, founded_date, apply_method, desc_zh, desc_en, need_kyc, region, status, slug) VALUES
+  (1, 'FomePay', 'FomePay', 'https://www.fomepay.com', '2020-01', '官网注册 / Website Registration', '全球虚拟信用卡平台，支持加密货币充值，快速发卡。', 'Global virtual credit card platform with crypto top-up and instant card issuance.', 0, 'Global', 'active', 'fomepay'),
+  (2, 'DuPay', 'DuPay', 'https://www.dupay.one', '2022-06', 'App注册 / App Registration', '支持USDT充值的虚拟卡平台，提供Visa和Mastercard卡段。', 'Virtual card platform supporting USDT top-up, offering Visa and Mastercard BINs.', 1, 'Global', 'active', 'dupay'),
+  (3, 'OneKey Card', 'OneKey Card', 'https://card.onekey.so', '2023-01', '官网注册 / Website Registration', '硬件钱包品牌推出的虚拟卡服务，安全性高。', 'Virtual card service by hardware wallet brand, high security.', 1, 'Global', 'active', 'onekey-card');
 
 -- Seed Data: Sample Cards (BINs)
-INSERT OR IGNORE INTO vcc_cards (id, provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status) VALUES
-  (1, 1, '556150', 'Mastercard', 'USD', 10.00, 1.5, 0.00, 20.00, '单笔$5000', '电商/广告/订阅', 'FomePay经典卡段', 'active'),
-  (2, 1, '404038', 'Visa', 'USD', 15.00, 2.0, 1.00, 50.00, '单笔$10000', '全场景', 'FomePay高额卡段', 'active'),
-  (3, 2, '531993', 'Mastercard', 'USD', 0.00, 1.2, 1.00, 5.00, '单笔$3000', '日常消费', 'DuPay标准卡', 'active'),
-  (4, 2, '559666', 'Mastercard', 'USD', 10.00, 0.8, 2.00, 100.00, '单笔$50000', '大额消费', 'DuPay高级卡', 'active'),
-  (5, 3, '556766', 'Visa', 'USD', 2.00, 1.0, 0.00, 10.00, '单笔$5000', '线上消费', 'OneKey基础卡', 'active');
+INSERT OR IGNORE INTO vcc_cards (id, provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status, slug) VALUES
+  (1, 1, '556150', 'Mastercard', 'USD', 10.00, 1.5, 0.00, 20.00, '单笔$5000', '电商/广告/订阅', 'FomePay经典卡段', 'active', 'fomepay-556150'),
+  (2, 1, '404038', 'Visa', 'USD', 15.00, 2.0, 1.00, 50.00, '单笔$10000', '全场景', 'FomePay高额卡段', 'active', 'fomepay-404038'),
+  (3, 2, '531993', 'Mastercard', 'USD', 0.00, 1.2, 1.00, 5.00, '单笔$3000', '日常消费', 'DuPay标准卡', 'active', 'dupay-531993'),
+  (4, 2, '559666', 'Mastercard', 'USD', 10.00, 0.8, 2.00, 100.00, '单笔$50000', '大额消费', 'DuPay高级卡', 'active', 'dupay-559666'),
+  (5, 3, '556766', 'Visa', 'USD', 2.00, 1.0, 0.00, 10.00, '单笔$5000', '线上消费', 'OneKey基础卡', 'active', 'onekey-card-556766');
 
 -- Seed Data: Provider-Tag Associations
 INSERT OR IGNORE INTO vcc_provider_tags (provider_id, tag_id) VALUES

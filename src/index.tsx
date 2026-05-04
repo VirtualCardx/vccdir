@@ -614,9 +614,10 @@ app.get('/admin', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
 
-  const [providers, cards] = await Promise.all([
+  const [providers, cards, tags] = await Promise.all([
     db.prepare('SELECT * FROM vcc_providers ORDER BY updated_at DESC').all<Provider>(),
     db.prepare('SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en, p.slug as provider_slug FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id ORDER BY c.created_at DESC').all<CardWithProvider>(),
+    db.prepare('SELECT * FROM vcc_tags ORDER BY category, id').all<Tag>(),
   ]);
 
   return c.html(
@@ -677,7 +678,7 @@ app.get('/admin', async (c) => {
         </div>
 
         {/* Cards Section */}
-        <div>
+        <div class="mb-12">
           <div class="flex items-center justify-between mb-4">
             <h2 class="text-xl font-bold text-gray-900">{t('admin.cards', lang)}</h2>
             <a href="/admin/card/new" class="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
@@ -728,9 +729,102 @@ app.get('/admin', async (c) => {
             </div>
           </div>
         </div>
+
+        {/* Tags Section */}
+        <div>
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-xl font-bold text-gray-900">{t('admin.tags', lang)}</h2>
+          </div>
+
+          {/* Add Tag Form */}
+          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-4">
+            <form method="post" action="/admin/tag/new" class="flex flex-wrap items-end gap-4">
+              <div class="flex-1 min-w-[150px]">
+                <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.tag_name_zh', lang)} *</label>
+                <input type="text" name="name_zh" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none text-sm" />
+              </div>
+              <div class="flex-1 min-w-[150px]">
+                <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.tag_name_en', lang)} *</label>
+                <input type="text" name="name_en" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none text-sm" />
+              </div>
+              <div class="w-40">
+                <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.tag_category', lang)}</label>
+                <select name="category" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none text-sm">
+                  <option value="payment">{t('admin.tag_category_payment', lang)}</option>
+                  <option value="compliance">{t('admin.tag_category_compliance', lang)}</option>
+                  <option value="feature">{t('admin.tag_category_feature', lang)}</option>
+                  <option value="type">{t('admin.tag_category_type', lang)}</option>
+                </select>
+              </div>
+              <button type="submit" class="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
+                + {t('admin.add_tag', lang)}
+              </button>
+            </form>
+          </div>
+
+          {/* Tags Table */}
+          <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th class="text-left px-4 py-3 font-medium text-gray-500">ID</th>
+                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.tag_name_zh', lang)}</th>
+                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.tag_name_en', lang)}</th>
+                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.tag_category', lang)}</th>
+                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.actions', lang)}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                  {tags.results.map((tag) => (
+                    <tr class="hover:bg-gray-50">
+                      <td class="px-4 py-3 text-gray-500">{tag.id}</td>
+                      <td class="px-4 py-3 font-medium text-gray-900">{tag.name_zh}</td>
+                      <td class="px-4 py-3 text-gray-700">{tag.name_en}</td>
+                      <td class="px-4 py-3">
+                        <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{tag.category || '-'}</span>
+                      </td>
+                      <td class="px-4 py-3">
+                        <a href={`/admin/tag/${tag.id}/delete`} class="text-red-500 hover:underline text-xs" onclick="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>{t('admin.delete', lang)}</a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
     </Layout>
   );
+});
+
+// ==========================================
+// Admin: Tag CRUD
+// ==========================================
+app.post('/admin/tag/new', async (c) => {
+  const db = c.env.DB;
+  const body = await c.req.parseBody();
+  const nameZh = String(body['name_zh'] || '').trim();
+  const nameEn = String(body['name_en'] || '').trim();
+  const category = String(body['category'] || '') || null;
+
+  if (nameZh && nameEn) {
+    await db.prepare('INSERT INTO vcc_tags (name_zh, name_en, category) VALUES (?, ?, ?)').bind(nameZh, nameEn, category).run();
+  }
+
+  return c.redirect('/admin');
+});
+
+app.get('/admin/tag/:id/delete', async (c) => {
+  const id = c.req.param('id');
+  const db = c.env.DB;
+
+  // Delete tag associations first, then the tag itself
+  await db.prepare('DELETE FROM vcc_provider_tags WHERE tag_id = ?').bind(id).run();
+  await db.prepare('DELETE FROM vcc_tags WHERE id = ?').bind(id).run();
+
+  return c.redirect('/admin');
 });
 
 // ==========================================

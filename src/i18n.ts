@@ -8,6 +8,7 @@ const translations = {
 
   // Navigation
   'nav.home': { zh: '首页', en: 'Home' },
+  'nav.content': { zh: '内容', en: 'Content' },
   'nav.admin': { zh: '管理后台', en: 'Admin' },
   'nav.login': { zh: '登录', en: 'Login' },
   'nav.logout': { zh: '退出', en: 'Logout' },
@@ -55,8 +56,21 @@ const translations = {
   'card.back_provider': { zh: '返回平台', en: 'Back to Platform' },
   'card.not_found': { zh: '卡段未找到', en: 'Card BIN not found' },
 
+  // Content
+  'content.title': { zh: '内容中心', en: 'Content Hub' },
+  'content.desc': { zh: '虚拟卡平台指南、费率说明和使用教程', en: 'Guides, fee explainers, and tutorials for virtual cards' },
+  'content.latest': { zh: '最新内容', en: 'Latest Content' },
+  'content.read_more': { zh: '阅读全文', en: 'Read More' },
+  'content.no_results': { zh: '暂无内容', en: 'No content yet' },
+  'content.not_found': { zh: '内容未找到', en: 'Content not found' },
+  'content.back': { zh: '返回内容中心', en: 'Back to Content' },
+
   // Admin
   'admin.title': { zh: '管理后台', en: 'Admin Dashboard' },
+  'admin.content': { zh: '内容管理', en: 'Manage Content' },
+  'admin.add_content': { zh: '添加内容', en: 'Add Content' },
+  'admin.edit_content': { zh: '编辑内容', en: 'Edit Content' },
+  'admin.delete_content': { zh: '删除内容', en: 'Delete Content' },
   'admin.providers': { zh: '平台管理', en: 'Manage Platforms' },
   'admin.cards': { zh: '卡段管理', en: 'Manage Cards' },
   'admin.add_provider': { zh: '添加平台', en: 'Add Platform' },

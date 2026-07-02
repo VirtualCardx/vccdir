@@ -6,13 +6,16 @@
 		"nodejs_compat"
 	],
 	"vars": {
-		"ADMIN_PASSWORD": "change-me-in-production"
+		"ADMIN_PASSWORD": "change-me-in-production",
+		"SESSION_SECRET": "change-me-in-production",
+		"HERMES_API_TOKEN": "change-me-in-production",
+		"SITE_URL": "https://vccdir.com"
 	},
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "vcc-db",
-			"database_id": "659dabde-5d75-41a8-a71c-85042e8145a2"
+			"database_id": "760e2ce1-d7b0-4d14-bac9-af786bd88a8c"
 		}
 	],
 	"r2_buckets": [

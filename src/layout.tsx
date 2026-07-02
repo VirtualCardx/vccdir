@@ -7,27 +7,37 @@ interface LayoutProps {
   description?: string;
   lang: Lang;
   isAdmin?: boolean;
-  jsonLd?: Record<string, unknown>;
+  canonicalUrl?: string;
+  noIndex?: boolean;
+  ogType?: string;
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
   children: Child;
 }
 
-export function Layout({ title, description, lang, isAdmin, jsonLd, children }: LayoutProps) {
+export function Layout({ title, description, lang, isAdmin, canonicalUrl, noIndex, ogType, jsonLd, children }: LayoutProps) {
   const desc = description || t('site.description', lang);
   const switchLang = lang === 'zh' ? 'en' : 'zh';
   const switchUrl = `/lang/${switchLang}`;
+  const canonical = canonicalUrl || '/';
+  const fullTitle = `${title} | ${t('site.title', lang)}`;
 
   return (
     <html lang={lang === 'zh' ? 'zh-CN' : 'en'}>
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>{title} | {t('site.title', lang)}</title>
+        <title>{fullTitle}</title>
         <meta name="description" content={desc} />
-        <meta name="robots" content="index, follow" />
-        <meta property="og:title" content={title} />
+        <meta name="robots" content={noIndex ? 'noindex, nofollow' : 'index, follow, max-image-preview:large'} />
+        <meta property="og:title" content={fullTitle} />
         <meta property="og:description" content={desc} />
-        <meta property="og:type" content="website" />
-        <link rel="canonical" href="/" />
+        <meta property="og:type" content={ogType || 'website'} />
+        <meta property="og:url" content={canonical} />
+        <meta property="og:site_name" content={t('site.title', lang)} />
+        <meta name="twitter:card" content="summary" />
+        <meta name="twitter:title" content={fullTitle} />
+        <meta name="twitter:description" content={desc} />
+        <link rel="canonical" href={canonical} />
         <script src="https://cdn.tailwindcss.com"></script>
         <script dangerouslySetInnerHTML={{
           __html: `tailwind.config = {
@@ -50,6 +60,16 @@ export function Layout({ title, description, lang, isAdmin, jsonLd, children }: 
             .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); }
             .tag-pill { transition: all 0.15s ease; }
             .tag-pill:hover { transform: scale(1.05); }
+            .content-prose > * + * { margin-top: 1rem; }
+            .content-prose h2 { font-size: 1.375rem; line-height: 1.3; font-weight: 700; color: #111827; margin-top: 1.75rem; }
+            .content-prose h3 { font-size: 1.125rem; line-height: 1.4; font-weight: 700; color: #111827; margin-top: 1.5rem; }
+            .content-prose ul, .content-prose ol { padding-left: 1.5rem; }
+            .content-prose ul { list-style: disc; }
+            .content-prose ol { list-style: decimal; }
+            .content-prose blockquote { border-left: 3px solid #93c5fd; padding-left: 1rem; color: #4b5563; background: #eff6ff; border-radius: 0 0.5rem 0.5rem 0; padding-top: 0.75rem; padding-bottom: 0.75rem; }
+            .content-prose a { color: #2563eb; text-decoration: underline; }
+            .rich-editor:empty:before { content: attr(data-placeholder); color: #9ca3af; }
+            .rich-editor:focus { outline: none; box-shadow: 0 0 0 2px #3b82f6; border-color: transparent; }
           `
         }} />
       </head>
@@ -64,6 +84,7 @@ export function Layout({ title, description, lang, isAdmin, jsonLd, children }: 
               </a>
               <div class="flex items-center space-x-4">
                 <a href="/" class="text-gray-600 hover:text-brand-600 text-sm font-medium">{t('nav.home', lang)}</a>
+                <a href="/content" class="text-gray-600 hover:text-brand-600 text-sm font-medium">{t('nav.content', lang)}</a>
                 {isAdmin ? (
                   <>
                     <a href="/admin" class="text-gray-600 hover:text-brand-600 text-sm font-medium">{t('nav.admin', lang)}</a>

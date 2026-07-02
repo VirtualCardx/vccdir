@@ -54,6 +54,21 @@ export interface ProviderWithTags extends Provider {
   card_count: number;
 }
 
+export interface ContentPost {
+  id: number;
+  title_zh: string;
+  title_en: string;
+  slug: string;
+  excerpt_zh: string | null;
+  excerpt_en: string | null;
+  body_zh: string;
+  body_en: string;
+  status: string;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AdminUser {
   id: number;
   username: string;

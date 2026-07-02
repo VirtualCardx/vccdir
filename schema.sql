@@ -66,6 +66,24 @@ CREATE TABLE IF NOT EXISTS admin_users (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- 内容发布表 (Articles / Knowledge Base)
+CREATE TABLE IF NOT EXISTS content_posts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title_zh TEXT NOT NULL,
+  title_en TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  excerpt_zh TEXT,
+  excerpt_en TEXT,
+  body_zh TEXT NOT NULL,
+  body_en TEXT NOT NULL,
+  status TEXT DEFAULT 'draft', -- draft / published
+  published_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_content_posts_status_published ON content_posts(status, published_at);
+
 -- ============================================
 -- Seed Data: Tags
 -- ============================================

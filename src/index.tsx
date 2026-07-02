@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import type { Context } from 'hono';
 import { Layout } from './layout';
 import { t, getLang } from './i18n';
-import type { Provider, Card, Tag, ProviderWithTags, CardWithProvider, Lang } from './types';
+import type { Provider, Card, Tag, ProviderWithTags, CardWithProvider, ContentPost, Lang } from './types';
 
 type Env = { Bindings: CloudflareBindings };
 const app = new Hono<Env>();
@@ -16,9 +17,134 @@ async function sha256(text: string): Promise<string> {
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function isLoggedIn(c: { req: { raw: Request } }): boolean {
-  const cookie = c.req.raw.headers.get('Cookie') || '';
-  return cookie.includes('admin_session=1');
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function randomToken(bytes = 32): string {
+  const values = new Uint8Array(bytes);
+  crypto.getRandomValues(values);
+  return base64Url(values);
+}
+
+function sessionSecret(c: Context<Env>): string {
+  return c.env.SESSION_SECRET || c.env.ADMIN_PASSWORD;
+}
+
+function isSecureRequest(c: Context<Env>): boolean {
+  return new URL(c.req.url).protocol === 'https:';
+}
+
+async function hmac(text: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text));
+  return base64Url(new Uint8Array(signature));
+}
+
+async function pbkdf2(password: string, salt: Uint8Array, iterations: number): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
+    key,
+    256
+  );
+  return bytesToHex(new Uint8Array(bits));
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  const iterations = 210000;
+  return `pbkdf2$${iterations}$${bytesToHex(salt)}$${await pbkdf2(password, salt, iterations)}`;
+}
+
+async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  if (storedHash.startsWith('pbkdf2$')) {
+    const [, iterationsText, saltHex, hash] = storedHash.split('$');
+    const iterations = Number(iterationsText);
+    if (!Number.isFinite(iterations) || !saltHex || !hash) return false;
+    const candidate = await pbkdf2(password, hexToBytes(saltHex), iterations);
+    return constantTimeEqual(candidate, hash);
+  }
+
+  return constantTimeEqual(await sha256(password), storedHash);
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return result === 0;
+}
+
+async function createSessionCookie(c: Context<Env>, userId: number): Promise<string> {
+  const expires = Math.floor(Date.now() / 1000) + 60 * 60 * 24;
+  const payload = `${userId}.${expires}.${randomToken(16)}`;
+  return `${payload}.${await hmac(payload, sessionSecret(c))}`;
+}
+
+async function isLoggedIn(c: Context<Env>): Promise<boolean> {
+  const session = getCookie(c, 'admin_session');
+  if (!session) return false;
+
+  const parts = session.split('.');
+  if (parts.length !== 4) return false;
+
+  const payload = parts.slice(0, 3).join('.');
+  const signature = parts[3];
+  const expected = await hmac(payload, sessionSecret(c));
+  if (!constantTimeEqual(signature, expected)) return false;
+
+  const expires = Number(parts[1]);
+  return Number.isFinite(expires) && expires > Math.floor(Date.now() / 1000);
+}
+
+function getCsrfToken(c: Context<Env>): string {
+  const existing = getCookie(c, 'csrf_token');
+  if (existing && existing.length >= 32) return existing;
+
+  const token = randomToken();
+  setCookie(c, 'csrf_token', token, {
+    path: '/admin',
+    httpOnly: false,
+    secure: isSecureRequest(c),
+    sameSite: 'Lax',
+    maxAge: 60 * 60 * 24,
+  });
+  return token;
+}
+
+async function verifyCsrf(c: Context<Env>): Promise<boolean> {
+  const cookieToken = getCookie(c, 'csrf_token');
+  if (!cookieToken) return false;
+
+  const body = await c.req.parseBody();
+  const formToken = body['csrf_token'];
+  return typeof formToken === 'string' && constantTimeEqual(formToken, cookieToken);
 }
 
 function providerName(p: Provider | { name_zh: string; name_en: string }, lang: Lang): string {
@@ -29,12 +155,146 @@ function providerDesc(p: Provider, lang: Lang): string {
   return (lang === 'zh' ? p.desc_zh : p.desc_en) || '';
 }
 
+function contentTitle(post: ContentPost, lang: Lang): string {
+  return lang === 'zh' ? post.title_zh : post.title_en;
+}
+
+function contentExcerpt(post: ContentPost, lang: Lang): string {
+  return (lang === 'zh' ? post.excerpt_zh : post.excerpt_en) || '';
+}
+
+function contentBody(post: ContentPost, lang: Lang): string {
+  return lang === 'zh' ? post.body_zh : post.body_en;
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function plainTextToHtml(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+function sanitizeContentHtml(html: string): string {
+  const allowedTags = new Set(['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'h2', 'h3', 'ul', 'ol', 'li', 'blockquote', 'a', 'hr']);
+  const safeHref = (href: string) => /^(https?:\/\/|mailto:|\/|#)/i.test(href) && !/^javascript:/i.test(href);
+  const withoutUnsafeBlocks = html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '');
+
+  return withoutUnsafeBlocks.replace(/<\/?([a-z0-9]+)([^>]*)>/gi, (tag, rawName: string, attrs: string) => {
+    const name = rawName.toLowerCase();
+    if (!allowedTags.has(name)) return '';
+    if (tag.startsWith('</')) return `</${name}>`;
+    if (name === 'br' || name === 'hr') return `<${name}>`;
+    if (name === 'a') {
+      const hrefMatch = attrs.match(/\s href=(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+      const href = hrefMatch ? (hrefMatch[1] || hrefMatch[2] || hrefMatch[3] || '').trim() : '';
+      if (!href || !safeHref(href)) return '<a>';
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">`;
+    }
+    return `<${name}>`;
+  });
+}
+
+function contentBodyHtml(body: string): string {
+  return /<\/?[a-z][\s\S]*>/i.test(body) ? sanitizeContentHtml(body) : plainTextToHtml(body);
+}
+
 function tagName(tag: Tag, lang: Lang): string {
   return lang === 'zh' ? tag.name_zh : tag.name_en;
 }
 
 function generateSlug(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function requireHermesAuth(c: Context<Env>): Response | null {
+  const expected = c.env.HERMES_API_TOKEN;
+  const header = c.req.header('Authorization') || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+
+  if (!expected || expected === 'change-me-in-production') {
+    return c.json({ error: 'HERMES_API_TOKEN is not configured' }, 503);
+  }
+
+  if (!token || !constantTimeEqual(token, expected)) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  return null;
+}
+
+function stringField(body: Record<string, unknown>, key: string, fallback = ''): string {
+  const value = body[key];
+  return typeof value === 'string' ? value.trim() : fallback;
+}
+
+function nullableStringField(body: Record<string, unknown>, key: string): string | null {
+  const value = stringField(body, key);
+  return value || null;
+}
+
+function normalizeContentStatus(value: string): string {
+  return value === 'published' ? 'published' : 'draft';
+}
+
+function siteOrigin(c: Context<Env>): string {
+  const configured = c.env.SITE_URL?.replace(/\/+$/, '');
+  if (configured && configured !== 'https://example.com') return configured;
+  return new URL(c.req.url).origin;
+}
+
+function absoluteUrl(c: Context<Env>, path: string): string {
+  return `${siteOrigin(c)}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+function baseJsonLd(c: Context<Env>, lang: Lang) {
+  const origin = siteOrigin(c);
+  return [
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Organization',
+      '@id': `${origin}/#organization`,
+      name: t('site.title', lang),
+      url: origin,
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'WebSite',
+      '@id': `${origin}/#website`,
+      name: t('site.title', lang),
+      url: origin,
+      publisher: { '@id': `${origin}/#organization` },
+      potentialAction: {
+        '@type': 'SearchAction',
+        target: `${origin}/?q={search_term_string}`,
+        'query-input': 'required name=search_term_string',
+      },
+    },
+  ];
+}
+
+function breadcrumbJsonLd(c: Context<Env>, items: { name: string; path: string }[]) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: items.map((item, index) => ({
+      '@type': 'ListItem',
+      position: index + 1,
+      name: item.name,
+      item: absoluteUrl(c, item.path),
+    })),
+  };
 }
 
 // ==========================================
@@ -51,8 +311,8 @@ app.get('/lang/:lang', (c) => {
 // ==========================================
 // R2 Image Proxy
 // ==========================================
-app.get('/images/:key', async (c) => {
-  const key = c.req.param('key');
+app.get('/images/*', async (c) => {
+  const key = c.req.path.replace('/images/', '');
   const object = await c.env.R2.get(key);
   if (!object) return c.notFound();
   const headers = new Headers();
@@ -61,13 +321,125 @@ app.get('/images/:key', async (c) => {
   return new Response(object.body, { headers });
 });
 
+app.get('/robots.txt', (c) => {
+  const body = `User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api/admin
+Disallow: /login
+
+Sitemap: ${absoluteUrl(c, '/sitemap.xml')}
+`;
+
+  return new Response(body, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600',
+    },
+  });
+});
+
+// ==========================================
+// Hermes Agent API
+// ==========================================
+app.use('/api/admin/*', async (c, next) => {
+  c.header('X-Robots-Tag', 'noindex, nofollow');
+  const unauthorized = requireHermesAuth(c);
+  if (unauthorized) return unauthorized;
+  await next();
+});
+
+app.get('/api/admin/content', async (c) => {
+  const status = c.req.query('status');
+  const limit = Math.min(Number(c.req.query('limit') || 50), 100);
+  const params: unknown[] = [];
+  let query = 'SELECT * FROM content_posts';
+
+  if (status === 'draft' || status === 'published') {
+    query += ' WHERE status = ?';
+    params.push(status);
+  }
+
+  query += ' ORDER BY updated_at DESC LIMIT ?';
+  params.push(limit);
+
+  const posts = await c.env.DB.prepare(query).bind(...params).all<ContentPost>();
+  return c.json({ results: posts.results });
+});
+
+app.get('/api/admin/content/:id', async (c) => {
+  const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(c.req.param('id')).first<ContentPost>();
+  if (!post) return c.json({ error: 'Content not found' }, 404);
+  return c.json(post);
+});
+
+app.post('/api/admin/content', async (c) => {
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const titleZh = stringField(body, 'title_zh');
+  const titleEn = stringField(body, 'title_en', titleZh);
+  const bodyZh = stringField(body, 'body_zh');
+  const bodyEn = stringField(body, 'body_en', bodyZh);
+  const slug = stringField(body, 'slug') || generateSlug(titleEn || titleZh);
+  const status = normalizeContentStatus(stringField(body, 'status'));
+
+  if (!titleZh || !titleEn || !bodyZh || !bodyEn || !slug) {
+    return c.json({ error: 'title_zh, title_en, body_zh, body_en, and slug are required' }, 400);
+  }
+
+  const publishedAt = status === 'published' ? (stringField(body, 'published_at') || new Date().toISOString()) : null;
+  const result = await c.env.DB.prepare(
+    'INSERT INTO content_posts (title_zh, title_en, slug, excerpt_zh, excerpt_en, body_zh, body_en, status, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(
+    titleZh, titleEn, slug, nullableStringField(body, 'excerpt_zh'), nullableStringField(body, 'excerpt_en'),
+    bodyZh, bodyEn, status, publishedAt
+  ).run();
+
+  const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(result.meta.last_row_id).first<ContentPost>();
+  return c.json(post, 201);
+});
+
+app.put('/api/admin/content/:id', async (c) => {
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(id).first<ContentPost>();
+  if (!existing) return c.json({ error: 'Content not found' }, 404);
+
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const status = normalizeContentStatus(stringField(body, 'status', existing.status));
+  const publishedAt = status === 'published'
+    ? (stringField(body, 'published_at') || existing.published_at || new Date().toISOString())
+    : null;
+
+  await c.env.DB.prepare(
+    `UPDATE content_posts SET title_zh = ?, title_en = ?, slug = ?, excerpt_zh = ?, excerpt_en = ?, body_zh = ?, body_en = ?, status = ?, published_at = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(
+    stringField(body, 'title_zh', existing.title_zh),
+    stringField(body, 'title_en', existing.title_en),
+    stringField(body, 'slug', existing.slug),
+    nullableStringField(body, 'excerpt_zh') ?? existing.excerpt_zh,
+    nullableStringField(body, 'excerpt_en') ?? existing.excerpt_en,
+    stringField(body, 'body_zh', existing.body_zh),
+    stringField(body, 'body_en', existing.body_en),
+    status,
+    publishedAt,
+    id
+  ).run();
+
+  const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(id).first<ContentPost>();
+  return c.json(post);
+});
+
+app.delete('/api/admin/content/:id', async (c) => {
+  await c.env.DB.prepare('DELETE FROM content_posts WHERE id = ?').bind(c.req.param('id')).run();
+  return c.json({ ok: true });
+});
+
 // ==========================================
 // Homepage - Provider Grid
 // ==========================================
 app.get('/', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
-  const admin = isLoggedIn(c);
+  const admin = await isLoggedIn(c);
   const search = c.req.query('q') || '';
   const tagFilter = c.req.query('tag') || '';
 
@@ -121,27 +493,25 @@ app.get('/', async (c) => {
     })
   );
 
-  const jsonLd = {
-    '@context': 'https://schema.org',
-    '@type': 'ItemList',
-    name: t('site.title', lang),
-    description: t('site.description', lang),
-    numberOfItems: providers.results.length,
-    itemListElement: providersWithTags.map((p, i) => ({
-      '@type': 'ListItem',
-      position: i + 1,
-      item: {
-        '@type': 'FinancialProduct',
-        name: providerName(p, 'en'),
-        description: p.desc_en || p.desc_zh,
-        url: `/provider/${p.slug}`,
-        provider: { '@type': 'Organization', name: p.name_en },
-      },
-    })),
-  };
+  const jsonLd = [
+    ...baseJsonLd(c, lang),
+    {
+      '@context': 'https://schema.org',
+      '@type': 'ItemList',
+      name: t('site.title', lang),
+      description: t('site.description', lang),
+      numberOfItems: providers.results.length,
+      itemListElement: providersWithTags.map((p, i) => ({
+        '@type': 'ListItem',
+        position: i + 1,
+        url: absoluteUrl(c, `/provider/${p.slug}`),
+        name: providerName(p, lang),
+      })),
+    },
+  ];
 
   return c.html(
-    <Layout title={t('home.hero.title', lang)} lang={lang} isAdmin={admin} jsonLd={jsonLd}>
+    <Layout title={t('home.hero.title', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, '/')} jsonLd={jsonLd}>
       {/* Hero Section */}
       <section class="bg-gradient-to-br from-brand-600 via-brand-700 to-brand-900 text-white py-16">
         <div class="max-w-7xl mx-auto px-4 text-center">
@@ -254,13 +624,13 @@ app.get('/', async (c) => {
 app.get('/provider/:slug', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
-  const admin = isLoggedIn(c);
+  const admin = await isLoggedIn(c);
   const slug = c.req.param('slug');
 
   const provider = await db.prepare('SELECT * FROM vcc_providers WHERE slug = ?').bind(slug).first<Provider>();
   if (!provider) {
     return c.html(
-      <Layout title={t('provider.not_found', lang)} lang={lang} isAdmin={admin}>
+      <Layout title={t('provider.not_found', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/provider/${slug}`)} noIndex>
         <div class="max-w-7xl mx-auto px-4 py-16 text-center">
           <h1 class="text-2xl font-bold text-gray-900 mb-4">{t('provider.not_found', lang)}</h1>
           <a href="/" class="text-brand-600 hover:underline">{t('provider.back', lang)}</a>
@@ -275,27 +645,36 @@ app.get('/provider/:slug', async (c) => {
     db.prepare('SELECT t.* FROM vcc_tags t INNER JOIN vcc_provider_tags pt ON t.id = pt.tag_id WHERE pt.provider_id = ?').bind(provider.id).all<Tag>(),
   ]);
 
-  const jsonLd = {
-    '@context': 'https://schema.org',
-    '@type': 'FinancialProduct',
-    name: providerName(provider, 'en'),
-    description: provider.desc_en || provider.desc_zh,
-    provider: {
-      '@type': 'Organization',
-      name: provider.name_en,
-      url: provider.website,
-      foundingDate: provider.founded_date,
+  const jsonLd = [
+    ...baseJsonLd(c, lang),
+    breadcrumbJsonLd(c, [
+      { name: t('nav.home', lang), path: '/' },
+      { name: providerName(provider, lang), path: `/provider/${provider.slug}` },
+    ]),
+    {
+      '@context': 'https://schema.org',
+      '@type': 'FinancialProduct',
+      name: providerName(provider, lang),
+      description: providerDesc(provider, lang),
+      url: absoluteUrl(c, `/provider/${provider.slug}`),
+      provider: {
+        '@type': 'Organization',
+        name: provider.name_en,
+        url: provider.website,
+        foundingDate: provider.founded_date,
+      },
+      offers: cards.results.map((card) => ({
+        '@type': 'Offer',
+        url: absoluteUrl(c, `/card/${card.slug}`),
+        name: `${card.card_type} ${card.bin}`,
+        priceCurrency: card.currency,
+        price: card.issuance_fee,
+      })),
     },
-    offers: cards.results.map((card) => ({
-      '@type': 'Offer',
-      name: `${card.card_type} ${card.bin}`,
-      priceCurrency: card.currency,
-      price: card.issuance_fee,
-    })),
-  };
+  ];
 
   return c.html(
-    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} isAdmin={admin} jsonLd={jsonLd}>
+    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/provider/${provider.slug}`)} jsonLd={jsonLd}>
       <div class="max-w-7xl mx-auto px-4 py-8">
         {/* Breadcrumb */}
         <nav class="mb-6 text-sm text-gray-500">
@@ -421,7 +800,7 @@ app.get('/provider/:slug', async (c) => {
 app.get('/card/:slug', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
-  const admin = isLoggedIn(c);
+  const admin = await isLoggedIn(c);
   const slug = c.req.param('slug');
 
   const card = await db.prepare(
@@ -430,7 +809,7 @@ app.get('/card/:slug', async (c) => {
 
   if (!card) {
     return c.html(
-      <Layout title={t('card.not_found', lang)} lang={lang} isAdmin={admin}>
+      <Layout title={t('card.not_found', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/card/${slug}`)} noIndex>
         <div class="max-w-7xl mx-auto px-4 py-16 text-center">
           <h1 class="text-2xl font-bold text-gray-900 mb-4">{t('card.not_found', lang)}</h1>
           <a href="/" class="text-brand-600 hover:underline">{t('provider.back', lang)}</a>
@@ -442,21 +821,30 @@ app.get('/card/:slug', async (c) => {
 
   const pName = lang === 'zh' ? card.provider_name_zh : card.provider_name_en;
 
-  const jsonLd = {
-    '@context': 'https://schema.org',
-    '@type': 'FinancialProduct',
-    name: `${card.card_type} ${card.bin}`,
-    description: card.description,
-    provider: { '@type': 'Organization', name: card.provider_name_en },
-    offers: {
-      '@type': 'Offer',
-      priceCurrency: card.currency,
-      price: card.issuance_fee,
+  const jsonLd = [
+    ...baseJsonLd(c, lang),
+    breadcrumbJsonLd(c, [
+      { name: t('nav.home', lang), path: '/' },
+      { name: pName, path: `/provider/${card.provider_slug}` },
+      { name: `${card.card_type} ${card.bin}`, path: `/card/${card.slug}` },
+    ]),
+    {
+      '@context': 'https://schema.org',
+      '@type': 'FinancialProduct',
+      name: `${card.card_type} ${card.bin}`,
+      description: card.description || `${pName} ${card.card_type} ${card.bin}`,
+      url: absoluteUrl(c, `/card/${card.slug}`),
+      provider: { '@type': 'Organization', name: card.provider_name_en },
+      offers: {
+        '@type': 'Offer',
+        priceCurrency: card.currency,
+        price: card.issuance_fee,
+      },
     },
-  };
+  ];
 
   return c.html(
-    <Layout title={`${card.card_type} ${card.bin}`} lang={lang} isAdmin={admin} jsonLd={jsonLd}>
+    <Layout title={`${card.card_type} ${card.bin}`} description={card.description || `${pName} ${card.card_type} ${card.bin}`} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/card/${card.slug}`)} jsonLd={jsonLd}>
       <div class="max-w-4xl mx-auto px-4 py-8">
         <nav class="mb-6 text-sm text-gray-500">
           <a href="/" class="hover:text-brand-600">{t('nav.home', lang)}</a>
@@ -536,15 +924,184 @@ app.get('/card/:slug', async (c) => {
 });
 
 // ==========================================
+// Content
+// ==========================================
+app.get('/content', async (c) => {
+  const lang = getLang(getCookie(c, 'lang'));
+  const admin = await isLoggedIn(c);
+  const csrfToken = admin ? getCsrfToken(c) : '';
+  const posts = admin
+    ? await c.env.DB.prepare('SELECT * FROM content_posts ORDER BY updated_at DESC').all<ContentPost>()
+    : await c.env.DB.prepare(
+      'SELECT * FROM content_posts WHERE status = ? ORDER BY published_at DESC, updated_at DESC'
+    ).bind('published').all<ContentPost>();
+  const publishedPosts = posts.results.filter((post) => post.status === 'published');
+
+  const jsonLd = [
+    ...baseJsonLd(c, lang),
+    breadcrumbJsonLd(c, [
+      { name: t('nav.home', lang), path: '/' },
+      { name: t('content.title', lang), path: '/content' },
+    ]),
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Blog',
+      name: t('content.title', lang),
+      description: t('content.desc', lang),
+      url: absoluteUrl(c, '/content'),
+      blogPost: publishedPosts.map((post) => ({
+        '@type': 'BlogPosting',
+        headline: contentTitle(post, lang),
+        url: absoluteUrl(c, `/content/${post.slug}`),
+        datePublished: post.published_at,
+        dateModified: post.updated_at,
+      })),
+    },
+  ];
+
+  return c.html(
+    <Layout title={t('content.title', lang)} description={t('content.desc', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, '/content')} jsonLd={jsonLd}>
+      <section class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 py-12">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h1 class="text-3xl font-bold text-gray-900 mb-3">{t('content.title', lang)}</h1>
+              <p class="text-gray-500 max-w-2xl">{t('content.desc', lang)}</p>
+            </div>
+            {admin && (
+              <a href="/admin/content/new" class="shrink-0 px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
+                + {t('admin.add_content', lang)}
+              </a>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section class="max-w-7xl mx-auto px-4 py-8">
+        <h2 class="text-xl font-bold text-gray-900 mb-4">{t('content.latest', lang)}</h2>
+        {posts.results.length === 0 ? (
+          <div class="text-center py-16 text-gray-400">{t('content.no_results', lang)}</div>
+        ) : (
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {posts.results.map((post) => (
+              <div class="card-hover bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div class="p-6">
+                  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-3">
+                  <h3 class="text-lg font-semibold text-gray-900 leading-snug">
+                    {post.status === 'published' ? (
+                      <a href={`/content/${post.slug}`} class="hover:text-brand-600">{contentTitle(post, lang)}</a>
+                    ) : (
+                      contentTitle(post, lang)
+                    )}
+                  </h3>
+                  <div class="flex shrink-0 items-center gap-2">
+                    {admin && (
+                      <span class={`px-2 py-0.5 rounded text-xs font-medium ${post.status === 'published' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {post.status === 'published' ? (lang === 'zh' ? '已发布' : 'Published') : (lang === 'zh' ? '草稿' : 'Draft')}
+                      </span>
+                    )}
+                    {post.published_at && <span class="text-xs text-gray-400">{post.published_at.slice(0, 10)}</span>}
+                  </div>
+                  </div>
+                  {contentExcerpt(post, lang) && <p class="text-gray-500 text-sm mb-4">{contentExcerpt(post, lang)}</p>}
+                  {post.status === 'published' ? (
+                    <a href={`/content/${post.slug}`} class="text-brand-600 font-medium text-sm">{t('content.read_more', lang)} &rarr;</a>
+                  ) : (
+                    <span class="text-gray-400 text-sm">{lang === 'zh' ? '草稿未公开' : 'Draft is not public'}</span>
+                  )}
+                </div>
+                {admin && (
+                  <div class="flex items-center justify-between gap-3 border-t border-gray-100 bg-gray-50 px-6 py-3">
+                    <span class="text-xs text-gray-400">{lang === 'zh' ? '管理操作' : 'Admin actions'}</span>
+                    <div class="flex items-start gap-3">
+                      <a href={`/admin/content/${post.id}/edit`} class="inline-flex h-7 items-center rounded-md px-2 text-xs font-medium leading-none text-brand-600 hover:bg-brand-50">{t('admin.edit', lang)}</a>
+                      <form method="post" action={`/admin/content/${post.id}/delete`} class="m-0 flex items-start" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
+                        <input type="hidden" name="csrf_token" value={csrfToken} />
+                        <button type="submit" class="inline-flex h-7 items-center rounded-md border-0 bg-transparent px-2 py-0 text-xs font-medium leading-none text-red-500 hover:bg-red-50">{t('admin.delete', lang)}</button>
+                      </form>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </Layout>
+  );
+});
+
+app.get('/content/:slug', async (c) => {
+  const lang = getLang(getCookie(c, 'lang'));
+  const admin = await isLoggedIn(c);
+  const slug = c.req.param('slug');
+  const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE slug = ? AND status = ?').bind(slug, 'published').first<ContentPost>();
+
+  if (!post) {
+    return c.html(
+      <Layout title={t('content.not_found', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/content/${slug}`)} noIndex>
+        <div class="max-w-7xl mx-auto px-4 py-16 text-center">
+          <h1 class="text-2xl font-bold text-gray-900 mb-4">{t('content.not_found', lang)}</h1>
+          <a href="/content" class="text-brand-600 hover:underline">{t('content.back', lang)}</a>
+        </div>
+      </Layout>,
+      404
+    );
+  }
+
+  const bodyHtml = contentBodyHtml(contentBody(post, lang));
+  const jsonLd = [
+    ...baseJsonLd(c, lang),
+    breadcrumbJsonLd(c, [
+      { name: t('nav.home', lang), path: '/' },
+      { name: t('content.title', lang), path: '/content' },
+      { name: contentTitle(post, lang), path: `/content/${post.slug}` },
+    ]),
+    {
+      '@context': 'https://schema.org',
+      '@type': 'BlogPosting',
+      headline: contentTitle(post, lang),
+      description: contentExcerpt(post, lang),
+      url: absoluteUrl(c, `/content/${post.slug}`),
+      mainEntityOfPage: absoluteUrl(c, `/content/${post.slug}`),
+      datePublished: post.published_at,
+      dateModified: post.updated_at,
+      publisher: { '@id': `${siteOrigin(c)}/#organization` },
+    },
+  ];
+
+  return c.html(
+    <Layout title={contentTitle(post, lang)} description={contentExcerpt(post, lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/content/${post.slug}`)} ogType="article" jsonLd={jsonLd}>
+      <article class="max-w-3xl mx-auto px-4 py-8">
+        <nav class="mb-6 text-sm text-gray-500">
+          <a href="/" class="hover:text-brand-600">{t('nav.home', lang)}</a>
+          <span class="mx-2">/</span>
+          <a href="/content" class="hover:text-brand-600">{t('content.title', lang)}</a>
+        </nav>
+        <header class="mb-8">
+          <h1 class="text-3xl font-bold text-gray-900 mb-3">{contentTitle(post, lang)}</h1>
+          {post.published_at && <div class="text-sm text-gray-400">{post.published_at.slice(0, 10)}</div>}
+          {contentExcerpt(post, lang) && <p class="text-gray-500 mt-4">{contentExcerpt(post, lang)}</p>}
+        </header>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <div class="content-prose text-gray-700 leading-7" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+        </div>
+      </article>
+    </Layout>
+  );
+});
+
+// ==========================================
 // Sitemap.xml
 // ==========================================
 app.get('/sitemap.xml', async (c) => {
   const db = c.env.DB;
-  const origin = new URL(c.req.url).origin;
+  const origin = siteOrigin(c);
 
-  const [providers, cards] = await Promise.all([
+  const [providers, cards, posts] = await Promise.all([
     db.prepare('SELECT slug, updated_at FROM vcc_providers WHERE status = ? ORDER BY updated_at DESC').bind('active').all<{ slug: string; updated_at: string }>(),
     db.prepare('SELECT c.slug, c.created_at FROM vcc_cards c WHERE c.status = ? ORDER BY c.created_at DESC').bind('active').all<{ slug: string; created_at: string }>(),
+    db.prepare('SELECT slug, updated_at FROM content_posts WHERE status = ? ORDER BY published_at DESC').bind('published').all<{ slug: string; updated_at: string }>(),
   ]);
 
   const urls: string[] = [];
@@ -576,6 +1133,22 @@ app.get('/sitemap.xml', async (c) => {
   </url>`);
   }
 
+  // Content pages
+  urls.push(`  <url>
+    <loc>${origin}/content</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>`);
+
+  for (const post of posts.results) {
+    const lastmod = post.updated_at ? `\n    <lastmod>${post.updated_at.split(' ')[0]}</lastmod>` : '';
+    urls.push(`  <url>
+    <loc>${origin}/content/${post.slug}</loc>${lastmod}
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>`);
+  }
+
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urls.join('\n')}
@@ -594,7 +1167,7 @@ app.get('/login', (c) => {
   const error = c.req.query('error');
 
   return c.html(
-    <Layout title={t('login.title', lang)} lang={lang}>
+    <Layout title={t('login.title', lang)} lang={lang} canonicalUrl={absoluteUrl(c, '/login')} noIndex>
       <div class="min-h-[60vh] flex items-center justify-center py-12 px-4">
         <div class="max-w-md w-full bg-white rounded-xl shadow-sm border border-gray-100 p-8">
           <h1 class="text-2xl font-bold text-gray-900 text-center mb-8">{t('login.title', lang)}</h1>
@@ -628,17 +1201,16 @@ app.post('/login', async (c) => {
   const username = String(body['username'] || '');
   const password = String(body['password'] || '');
 
-  const hash = await sha256(password);
-  const user = await db.prepare('SELECT * FROM admin_users WHERE username = ? AND password_hash = ?').bind(username, hash).first();
+  const user = await db.prepare('SELECT id, password_hash FROM admin_users WHERE username = ?').bind(username).first<{ id: number; password_hash: string }>();
 
-  if (!user) {
+  if (!user || !(await verifyPassword(password, user.password_hash))) {
     return c.redirect('/login?error=1');
   }
 
-  setCookie(c, 'admin_session', '1', {
+  setCookie(c, 'admin_session', await createSessionCookie(c, user.id), {
     path: '/',
     httpOnly: true,
-    secure: true,
+    secure: isSecureRequest(c),
     sameSite: 'Lax',
     maxAge: 60 * 60 * 24, // 24 hours
   });
@@ -647,6 +1219,7 @@ app.post('/login', async (c) => {
 
 app.get('/logout', (c) => {
   deleteCookie(c, 'admin_session', { path: '/' });
+  deleteCookie(c, 'csrf_token', { path: '/admin' });
   return c.redirect('/');
 });
 
@@ -654,7 +1227,8 @@ app.get('/logout', (c) => {
 // Admin Middleware
 // ==========================================
 app.use('/admin/*', async (c, next) => {
-  if (!isLoggedIn(c)) return c.redirect('/login');
+  if (!(await isLoggedIn(c))) return c.redirect('/login');
+  if (c.req.method === 'POST' && !(await verifyCsrf(c))) return c.text('Invalid CSRF token', 403);
   await next();
 });
 
@@ -664,15 +1238,17 @@ app.use('/admin/*', async (c, next) => {
 app.get('/admin', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
+  const csrfToken = getCsrfToken(c);
 
-  const [providers, cards, tags] = await Promise.all([
+  const [providers, cards, posts, tags] = await Promise.all([
     db.prepare('SELECT * FROM vcc_providers ORDER BY updated_at DESC').all<Provider>(),
     db.prepare('SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en, p.slug as provider_slug FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id ORDER BY c.created_at DESC').all<CardWithProvider>(),
+    db.prepare('SELECT * FROM content_posts ORDER BY updated_at DESC').all<ContentPost>(),
     db.prepare('SELECT * FROM vcc_tags ORDER BY category, id').all<Tag>(),
   ]);
 
   return c.html(
-    <Layout title={t('admin.title', lang)} lang={lang} isAdmin={true}>
+    <Layout title={t('admin.title', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin')} noIndex>
       <div class="max-w-7xl mx-auto px-4 py-8">
         <div class="flex items-center justify-between mb-8">
           <h1 class="text-2xl font-bold text-gray-900">{t('admin.title', lang)}</h1>
@@ -716,9 +1292,12 @@ app.get('/admin', async (c) => {
                           {p.status === 'active' ? t('common.active', lang) : t('common.inactive', lang)}
                         </span>
                       </td>
-                      <td class="px-4 py-3 space-x-2">
+                      <td class="px-4 py-3">
                         <a href={`/admin/provider/${p.id}/edit`} class="text-brand-600 hover:underline text-xs">{t('admin.edit', lang)}</a>
-                        <a href={`/admin/provider/${p.id}/delete`} class="text-red-500 hover:underline text-xs" onclick="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>{t('admin.delete', lang)}</a>
+                        <form method="post" action={`/admin/provider/${p.id}/delete`} class="inline ml-2" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
+                          <input type="hidden" name="csrf_token" value={csrfToken} />
+                          <button type="submit" class="text-red-500 hover:underline text-xs">{t('admin.delete', lang)}</button>
+                        </form>
                       </td>
                     </tr>
                   ))}
@@ -769,15 +1348,67 @@ app.get('/admin', async (c) => {
                       <td class="px-4 py-3">{card.fee_rate}%</td>
                       <td class="px-4 py-3">${card.monthly_fee}</td>
                       <td class="px-4 py-3">${card.initial_load}</td>
-                      <td class="px-4 py-3 space-x-2">
+                      <td class="px-4 py-3">
                         <a href={`/admin/card/${card.id}/edit`} class="text-brand-600 hover:underline text-xs">{t('admin.edit', lang)}</a>
-                        <a href={`/admin/card/${card.id}/delete`} class="text-red-500 hover:underline text-xs" onclick="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>{t('admin.delete', lang)}</a>
+                        <form method="post" action={`/admin/card/${card.id}/delete`} class="inline ml-2" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
+                          <input type="hidden" name="csrf_token" value={csrfToken} />
+                          <button type="submit" class="text-red-500 hover:underline text-xs">{t('admin.delete', lang)}</button>
+                        </form>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        {/* Content Section */}
+        <div class="mb-12">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h2 class="text-xl font-bold text-gray-900">{t('admin.content', lang)}</h2>
+              <p class="text-sm text-gray-500 mt-1">{lang === 'zh' ? '管理文章、草稿和公开内容' : 'Manage articles, drafts, and published content'}</p>
+            </div>
+            <a href="/admin/content/new" class="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
+              + {t('admin.add_content', lang)}
+            </a>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {posts.results.length === 0 ? (
+              <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center text-gray-400 lg:col-span-2">
+                {t('content.no_results', lang)}
+              </div>
+            ) : posts.results.map((post) => (
+              <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                <div class="flex items-start justify-between gap-4 mb-3">
+                  <div>
+                    <h3 class="font-semibold text-gray-900 mb-1">{contentTitle(post, lang)}</h3>
+                    <div class="font-mono text-xs text-gray-400">/{post.slug}</div>
+                  </div>
+                  <span class={`shrink-0 px-2 py-0.5 rounded text-xs font-medium ${post.status === 'published' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                    {post.status === 'published' ? (lang === 'zh' ? '已发布' : 'Published') : (lang === 'zh' ? '草稿' : 'Draft')}
+                  </span>
+                </div>
+                <p class="text-sm text-gray-500 line-clamp-2" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+                  {contentExcerpt(post, lang) || (lang === 'zh' ? '暂无摘要' : 'No excerpt')}
+                </p>
+                <div class="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
+                  <div class="text-xs text-gray-400">
+                    {lang === 'zh' ? '更新' : 'Updated'} {post.updated_at ? post.updated_at.slice(0, 10) : '-'}
+                    {post.published_at && <span class="ml-2">{lang === 'zh' ? '发布' : 'Published'} {post.published_at.slice(0, 10)}</span>}
+                  </div>
+                  <div class="flex items-start gap-2">
+                    {post.status === 'published' && <a href={`/content/${post.slug}`} class="text-gray-500 hover:underline text-xs" target="_blank">View</a>}
+                    <a href={`/admin/content/${post.id}/edit`} class="inline-flex h-7 items-center rounded-md px-2 text-xs font-medium leading-none text-brand-600 hover:bg-brand-50">{t('admin.edit', lang)}</a>
+                    <form method="post" action={`/admin/content/${post.id}/delete`} class="m-0 flex items-start" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
+                      <input type="hidden" name="csrf_token" value={csrfToken} />
+                      <button type="submit" class="inline-flex h-7 items-center rounded-md border-0 bg-transparent px-2 py-0 text-xs font-medium leading-none text-red-500 hover:bg-red-50">{t('admin.delete', lang)}</button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -790,6 +1421,7 @@ app.get('/admin', async (c) => {
           {/* Add Tag Form */}
           <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-4">
             <form method="post" action="/admin/tag/new" class="flex flex-wrap items-end gap-4">
+              <input type="hidden" name="csrf_token" value={csrfToken} />
               <div class="flex-1 min-w-[150px]">
                 <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.tag_name_zh', lang)} *</label>
                 <input type="text" name="name_zh" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none text-sm" />
@@ -836,7 +1468,10 @@ app.get('/admin', async (c) => {
                         <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{tag.category || '-'}</span>
                       </td>
                       <td class="px-4 py-3">
-                        <a href={`/admin/tag/${tag.id}/delete`} class="text-red-500 hover:underline text-xs" onclick="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>{t('admin.delete', lang)}</a>
+                        <form method="post" action={`/admin/tag/${tag.id}/delete`} class="inline" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
+                          <input type="hidden" name="csrf_token" value={csrfToken} />
+                          <button type="submit" class="text-red-500 hover:underline text-xs">{t('admin.delete', lang)}</button>
+                        </form>
                       </td>
                     </tr>
                   ))}
@@ -848,6 +1483,264 @@ app.get('/admin', async (c) => {
       </div>
     </Layout>
   );
+});
+
+// ==========================================
+// Admin: Content CRUD
+// ==========================================
+
+function ContentForm({ post, lang, action, csrfToken }: {
+  post?: ContentPost;
+  lang: Lang;
+  action: string;
+  csrfToken: string;
+}) {
+  const bodyZh = contentBodyHtml(post?.body_zh || '');
+  const bodyEn = contentBodyHtml(post?.body_en || '');
+  const editorTools = [
+    { cmd: 'formatBlock', value: 'h2', label: 'H2' },
+    { cmd: 'formatBlock', value: 'h3', label: 'H3' },
+    { cmd: 'formatBlock', value: 'p', label: 'P' },
+    { cmd: 'bold', label: 'B' },
+    { cmd: 'italic', label: 'I' },
+    { cmd: 'underline', label: 'U' },
+    { cmd: 'insertUnorderedList', label: 'UL' },
+    { cmd: 'insertOrderedList', label: 'OL' },
+    { cmd: 'formatBlock', value: 'blockquote', label: '"' },
+    { cmd: 'createLink', label: 'Link' },
+    { cmd: 'removeFormat', label: 'Clear' },
+  ];
+
+  return (
+    <form method="post" action={action} class="space-y-6" data-rich-content-form="true">
+      <input type="hidden" name="csrf_token" value={csrfToken} />
+      <div class="grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-6">
+        <div class="space-y-6">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '中文标题' : 'Chinese Title'} *</label>
+              <input type="text" name="title_zh" required value={post?.title_zh || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '英文标题' : 'English Title'} *</label>
+              <input type="text" name="title_en" required value={post?.title_en || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Slug</label>
+              <input type="text" name="slug" value={post?.slug || ''} placeholder={lang === 'zh' ? '留空自动生成' : 'Leave empty to auto-generate'} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none font-mono text-sm" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">{t('common.status', lang)}</label>
+              <select name="status" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">
+                <option value="draft" selected={(!post || post.status === 'draft')}>{lang === 'zh' ? '草稿' : 'Draft'}</option>
+                <option value="published" selected={post?.status === 'published'}>{lang === 'zh' ? '已发布' : 'Published'}</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '中文摘要' : 'Chinese Excerpt'}</label>
+              <textarea name="excerpt_zh" rows={3} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">{post?.excerpt_zh || ''}</textarea>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '英文摘要' : 'English Excerpt'}</label>
+              <textarea name="excerpt_en" rows={3} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">{post?.excerpt_en || ''}</textarea>
+            </div>
+          </div>
+
+          <div class="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
+            <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-200 bg-white">
+              <h2 class="font-semibold text-gray-900">{lang === 'zh' ? '富文本正文' : 'Rich Text Body'}</h2>
+              <div class="flex rounded-lg bg-gray-100 p-1">
+                <button type="button" data-tab-target="zh" class="px-3 py-1.5 rounded-md bg-white text-brand-600 text-sm font-medium shadow-sm">{lang === 'zh' ? '中文' : 'ZH'}</button>
+                <button type="button" data-tab-target="en" class="px-3 py-1.5 rounded-md text-gray-500 text-sm font-medium">{lang === 'zh' ? '英文' : 'EN'}</button>
+              </div>
+            </div>
+
+            {[
+              { key: 'zh', name: 'body_zh', html: bodyZh },
+              { key: 'en', name: 'body_en', html: bodyEn },
+            ].map((editor) => (
+              <div data-editor-panel={editor.key} class={editor.key === 'en' ? 'hidden' : ''}>
+                <input type="hidden" name={editor.name} value={editor.html} data-editor-input={editor.key} />
+                <div class="flex flex-wrap items-center gap-1 px-3 py-2 border-b border-gray-200 bg-white">
+                  {editorTools.map((tool) => (
+                    <button type="button" data-editor-command={tool.cmd} data-editor-value={tool.value || ''} class="min-w-9 h-8 px-2 rounded-md border border-gray-200 bg-white text-xs font-semibold text-gray-600 hover:bg-brand-50 hover:text-brand-600">
+                      {tool.label}
+                    </button>
+                  ))}
+                </div>
+                <div
+                  contenteditable={true}
+                  data-editor={editor.key}
+                  data-placeholder={lang === 'zh' ? '在这里编写内容...' : 'Write content here...'}
+                  class="rich-editor content-prose min-h-[360px] bg-white px-4 py-4 text-gray-800 leading-7"
+                  dangerouslySetInnerHTML={{ __html: editor.html }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <aside class="space-y-4">
+          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+            <h3 class="font-semibold text-gray-900 mb-3">{lang === 'zh' ? '发布设置' : 'Publish Settings'}</h3>
+            <div class="space-y-3 text-sm text-gray-500">
+              <div class="flex justify-between"><span>ID</span><span class="font-mono">{post?.id || '-'}</span></div>
+              <div class="flex justify-between"><span>{lang === 'zh' ? '状态' : 'Status'}</span><span>{post?.status === 'published' ? (lang === 'zh' ? '已发布' : 'Published') : (lang === 'zh' ? '草稿' : 'Draft')}</span></div>
+              <div class="flex justify-between"><span>{lang === 'zh' ? '创建' : 'Created'}</span><span>{post?.created_at ? post.created_at.slice(0, 10) : '-'}</span></div>
+              <div class="flex justify-between"><span>{lang === 'zh' ? '更新' : 'Updated'}</span><span>{post?.updated_at ? post.updated_at.slice(0, 10) : '-'}</span></div>
+            </div>
+          </div>
+          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+            <h3 class="font-semibold text-gray-900 mb-3">{lang === 'zh' ? '操作' : 'Actions'}</h3>
+            <div class="space-y-3">
+              <button type="submit" class="w-full px-4 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors">
+                {t('admin.save', lang)}
+              </button>
+              {post?.status === 'published' && (
+                <a href={`/content/${post.slug}`} target="_blank" class="block w-full text-center px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors">
+                  {lang === 'zh' ? '查看公开页' : 'View Public Page'}
+                </a>
+              )}
+              <a href="/admin" class="block w-full text-center px-4 py-2.5 bg-gray-100 text-gray-600 rounded-lg font-medium hover:bg-gray-200 transition-colors">
+                {t('admin.cancel', lang)}
+              </a>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <script dangerouslySetInnerHTML={{ __html: `
+        (() => {
+          const form = document.querySelector('[data-rich-content-form]');
+          if (!form) return;
+          const sync = () => {
+            form.querySelectorAll('[data-editor]').forEach((editor) => {
+              const key = editor.getAttribute('data-editor');
+              const input = form.querySelector('[data-editor-input="' + key + '"]');
+              if (input) input.value = editor.innerHTML.trim();
+            });
+          };
+          const activateTab = (key) => {
+            form.querySelectorAll('[data-editor-panel]').forEach((panel) => {
+              panel.classList.toggle('hidden', panel.getAttribute('data-editor-panel') !== key);
+            });
+            form.querySelectorAll('[data-tab-target]').forEach((button) => {
+              const active = button.getAttribute('data-tab-target') === key;
+              button.classList.toggle('bg-white', active);
+              button.classList.toggle('text-brand-600', active);
+              button.classList.toggle('shadow-sm', active);
+              button.classList.toggle('text-gray-500', !active);
+            });
+          };
+          form.querySelectorAll('[data-tab-target]').forEach((button) => {
+            button.addEventListener('click', () => activateTab(button.getAttribute('data-tab-target')));
+          });
+          form.querySelectorAll('[data-editor-command]').forEach((button) => {
+            button.addEventListener('click', () => {
+              const panel = button.closest('[data-editor-panel]');
+              const editor = panel && panel.querySelector('[data-editor]');
+              if (!editor) return;
+              editor.focus();
+              const command = button.getAttribute('data-editor-command');
+              let value = button.getAttribute('data-editor-value') || null;
+              if (command === 'createLink') {
+                value = prompt('${lang === 'zh' ? '输入链接地址' : 'Enter URL'}') || '';
+                if (!value) return;
+              }
+              document.execCommand(command, false, value);
+              sync();
+            });
+          });
+          form.querySelectorAll('[data-editor]').forEach((editor) => {
+            editor.addEventListener('input', sync);
+            editor.addEventListener('blur', sync);
+          });
+          form.addEventListener('submit', sync);
+        })();
+      ` }} />
+    </form>
+  );
+}
+
+app.get('/admin/content/new', (c) => {
+  const lang = getLang(getCookie(c, 'lang'));
+  const csrfToken = getCsrfToken(c);
+
+  return c.html(
+    <Layout title={t('admin.add_content', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin/content/new')} noIndex>
+      <div class="max-w-4xl mx-auto px-4 py-8">
+        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.add_content', lang)}</h1>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <ContentForm lang={lang} action="/admin/content/new" csrfToken={csrfToken} />
+        </div>
+      </div>
+    </Layout>
+  );
+});
+
+app.post('/admin/content/new', async (c) => {
+  const body = await c.req.parseBody();
+  const titleZh = String(body['title_zh'] || '').trim();
+  const titleEn = String(body['title_en'] || '').trim();
+  const bodyZh = String(body['body_zh'] || '').trim();
+  const bodyEn = String(body['body_en'] || '').trim();
+  const slug = String(body['slug'] || '').trim() || generateSlug(titleEn || titleZh);
+  const status = normalizeContentStatus(String(body['status'] || 'draft'));
+  const publishedAt = status === 'published' ? new Date().toISOString() : null;
+
+  await c.env.DB.prepare(
+    'INSERT INTO content_posts (title_zh, title_en, slug, excerpt_zh, excerpt_en, body_zh, body_en, status, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(
+    titleZh, titleEn, slug, body['excerpt_zh'] || null, body['excerpt_en'] || null, bodyZh, bodyEn, status, publishedAt
+  ).run();
+
+  return c.redirect('/admin');
+});
+
+app.get('/admin/content/:id/edit', async (c) => {
+  const lang = getLang(getCookie(c, 'lang'));
+  const csrfToken = getCsrfToken(c);
+  const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(c.req.param('id')).first<ContentPost>();
+  if (!post) return c.redirect('/admin');
+
+  return c.html(
+    <Layout title={t('admin.edit_content', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, `/admin/content/${post.id}/edit`)} noIndex>
+      <div class="max-w-4xl mx-auto px-4 py-8">
+        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.edit_content', lang)}: {contentTitle(post, lang)}</h1>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <ContentForm post={post} lang={lang} action={`/admin/content/${post.id}/edit`} csrfToken={csrfToken} />
+        </div>
+      </div>
+    </Layout>
+  );
+});
+
+app.post('/admin/content/:id/edit', async (c) => {
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(id).first<ContentPost>();
+  if (!existing) return c.redirect('/admin');
+
+  const body = await c.req.parseBody();
+  const status = normalizeContentStatus(String(body['status'] || 'draft'));
+  const publishedAt = status === 'published' ? (existing.published_at || new Date().toISOString()) : null;
+  const slug = String(body['slug'] || '').trim() || generateSlug(String(body['title_en'] || body['title_zh'] || existing.slug));
+
+  await c.env.DB.prepare(
+    `UPDATE content_posts SET title_zh = ?, title_en = ?, slug = ?, excerpt_zh = ?, excerpt_en = ?, body_zh = ?, body_en = ?, status = ?, published_at = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(
+    body['title_zh'], body['title_en'], slug, body['excerpt_zh'] || null, body['excerpt_en'] || null,
+    body['body_zh'], body['body_en'], status, publishedAt, id
+  ).run();
+
+  return c.redirect('/admin');
+});
+
+app.post('/admin/content/:id/delete', async (c) => {
+  await c.env.DB.prepare('DELETE FROM content_posts WHERE id = ?').bind(c.req.param('id')).run();
+  return c.redirect('/admin');
 });
 
 // ==========================================
@@ -867,7 +1760,7 @@ app.post('/admin/tag/new', async (c) => {
   return c.redirect('/admin');
 });
 
-app.get('/admin/tag/:id/delete', async (c) => {
+app.post('/admin/tag/:id/delete', async (c) => {
   const id = c.req.param('id');
   const db = c.env.DB;
 
@@ -885,9 +1778,10 @@ app.get('/admin/password', (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const success = c.req.query('success');
   const error = c.req.query('error');
+  const csrfToken = getCsrfToken(c);
 
   return c.html(
-    <Layout title={t('admin.change_password', lang)} lang={lang} isAdmin={true}>
+    <Layout title={t('admin.change_password', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin/password')} noIndex>
       <div class="max-w-lg mx-auto px-4 py-8">
         <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.change_password', lang)}</h1>
         {success && (
@@ -912,6 +1806,7 @@ app.get('/admin/password', (c) => {
         )}
         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <form method="post" action="/admin/password" class="space-y-5">
+            <input type="hidden" name="csrf_token" value={csrfToken} />
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.old_password', lang)} *</label>
               <input type="password" name="old_password" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
@@ -955,15 +1850,14 @@ app.post('/admin/password', async (c) => {
   }
 
   // Verify old password against the first admin user (current session)
-  const oldHash = await sha256(oldPassword);
-  const user = await db.prepare('SELECT id FROM admin_users WHERE password_hash = ?').bind(oldHash).first<{ id: number }>();
+  const user = await db.prepare('SELECT id, password_hash FROM admin_users ORDER BY id LIMIT 1').first<{ id: number; password_hash: string }>();
 
-  if (!user) {
+  if (!user || !(await verifyPassword(oldPassword, user.password_hash))) {
     return c.redirect('/admin/password?error=old');
   }
 
   // Update password
-  const newHash = await sha256(newPassword);
+  const newHash = await hashPassword(newPassword);
   await db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?').bind(newHash, user.id).run();
 
   return c.redirect('/admin/password?success=1');
@@ -974,15 +1868,17 @@ app.post('/admin/password', async (c) => {
 // ==========================================
 
 // Provider Form Component
-function ProviderForm({ provider, tags, selectedTags, lang, action }: {
+function ProviderForm({ provider, tags, selectedTags, lang, action, csrfToken }: {
   provider?: Provider;
   tags: Tag[];
   selectedTags: number[];
   lang: Lang;
   action: string;
+  csrfToken: string;
 }) {
   return (
     <form method="post" action={action} enctype="multipart/form-data" class="space-y-6">
+      <input type="hidden" name="csrf_token" value={csrfToken} />
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '中文名称' : 'Chinese Name'} *</label>
@@ -1066,14 +1962,15 @@ function ProviderForm({ provider, tags, selectedTags, lang, action }: {
 // New Provider
 app.get('/admin/provider/new', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
+  const csrfToken = getCsrfToken(c);
   const tags = await c.env.DB.prepare('SELECT * FROM vcc_tags ORDER BY category, id').all<Tag>();
 
   return c.html(
-    <Layout title={t('admin.add_provider', lang)} lang={lang} isAdmin={true}>
+    <Layout title={t('admin.add_provider', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin/provider/new')} noIndex>
       <div class="max-w-4xl mx-auto px-4 py-8">
         <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.add_provider', lang)}</h1>
         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <ProviderForm tags={tags.results} selectedTags={[]} lang={lang} action="/admin/provider/new" />
+          <ProviderForm tags={tags.results} selectedTags={[]} lang={lang} action="/admin/provider/new" csrfToken={csrfToken} />
         </div>
       </div>
     </Layout>
@@ -1122,6 +2019,7 @@ app.get('/admin/provider/:id/edit', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
   const id = c.req.param('id');
+  const csrfToken = getCsrfToken(c);
 
   const [provider, tags, selectedTagsResult] = await Promise.all([
     db.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(id).first<Provider>(),
@@ -1134,11 +2032,11 @@ app.get('/admin/provider/:id/edit', async (c) => {
   const selectedTags = selectedTagsResult.results.map(r => r.tag_id);
 
   return c.html(
-    <Layout title={t('admin.edit_provider', lang)} lang={lang} isAdmin={true}>
+    <Layout title={t('admin.edit_provider', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, `/admin/provider/${id}/edit`)} noIndex>
       <div class="max-w-4xl mx-auto px-4 py-8">
         <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.edit_provider', lang)}: {providerName(provider, lang)}</h1>
         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <ProviderForm provider={provider} tags={tags.results} selectedTags={selectedTags} lang={lang} action={`/admin/provider/${id}/edit`} />
+          <ProviderForm provider={provider} tags={tags.results} selectedTags={selectedTags} lang={lang} action={`/admin/provider/${id}/edit`} csrfToken={csrfToken} />
         </div>
       </div>
     </Layout>
@@ -1187,7 +2085,7 @@ app.post('/admin/provider/:id/edit', async (c) => {
 });
 
 // Delete Provider
-app.get('/admin/provider/:id/delete', async (c) => {
+app.post('/admin/provider/:id/delete', async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM vcc_providers WHERE id = ?').bind(id).run();
   return c.redirect('/admin');
@@ -1197,14 +2095,16 @@ app.get('/admin/provider/:id/delete', async (c) => {
 // Admin: Card CRUD
 // ==========================================
 
-function CardForm({ card, providers, lang, action }: {
+function CardForm({ card, providers, lang, action, csrfToken }: {
   card?: Card;
   providers: Provider[];
   lang: Lang;
   action: string;
+  csrfToken: string;
 }) {
   return (
     <form method="post" action={action} class="space-y-6">
+      <input type="hidden" name="csrf_token" value={csrfToken} />
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.provider', lang)} *</label>
@@ -1285,14 +2185,15 @@ function CardForm({ card, providers, lang, action }: {
 // New Card
 app.get('/admin/card/new', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
+  const csrfToken = getCsrfToken(c);
   const providers = await c.env.DB.prepare('SELECT * FROM vcc_providers ORDER BY name_en').all<Provider>();
 
   return c.html(
-    <Layout title={t('admin.add_card', lang)} lang={lang} isAdmin={true}>
+    <Layout title={t('admin.add_card', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin/card/new')} noIndex>
       <div class="max-w-4xl mx-auto px-4 py-8">
         <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.add_card', lang)}</h1>
         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <CardForm providers={providers.results} lang={lang} action="/admin/card/new" />
+          <CardForm providers={providers.results} lang={lang} action="/admin/card/new" csrfToken={csrfToken} />
         </div>
       </div>
     </Layout>
@@ -1328,6 +2229,7 @@ app.get('/admin/card/:id/edit', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
   const id = c.req.param('id');
+  const csrfToken = getCsrfToken(c);
 
   const [card, providers] = await Promise.all([
     db.prepare('SELECT * FROM vcc_cards WHERE id = ?').bind(id).first<Card>(),
@@ -1337,11 +2239,11 @@ app.get('/admin/card/:id/edit', async (c) => {
   if (!card) return c.redirect('/admin');
 
   return c.html(
-    <Layout title={t('admin.edit_card', lang)} lang={lang} isAdmin={true}>
+    <Layout title={t('admin.edit_card', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, `/admin/card/${id}/edit`)} noIndex>
       <div class="max-w-4xl mx-auto px-4 py-8">
         <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.edit_card', lang)}</h1>
         <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <CardForm card={card} providers={providers.results} lang={lang} action={`/admin/card/${id}/edit`} />
+          <CardForm card={card} providers={providers.results} lang={lang} action={`/admin/card/${id}/edit`} csrfToken={csrfToken} />
         </div>
       </div>
     </Layout>
@@ -1374,7 +2276,7 @@ app.post('/admin/card/:id/edit', async (c) => {
 });
 
 // Delete Card
-app.get('/admin/card/:id/delete', async (c) => {
+app.post('/admin/card/:id/delete', async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM vcc_cards WHERE id = ?').bind(id).run();
   return c.redirect('/admin');

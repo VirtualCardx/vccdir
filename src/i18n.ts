@@ -3,7 +3,7 @@ import type { Lang } from './types';
 const translations = {
   // Site
   'site.title': { zh: 'VCC虚拟卡目录', en: 'VCC Directory' },
-  'site.description': { zh: '全球虚拟信用卡平台导航 — 对比费率，发现最佳虚拟卡', en: 'Global Virtual Credit Card Platform Navigator — Compare rates, find the best VCC' },
+  'site.description': { zh: 'VCC虚拟卡目录收录全球虚拟信用卡平台，提供开卡费、充值费率、月费、支持币种及使用场景对比，帮助你筛选适合广告投放、订阅和跨境支付的虚拟卡。', en: 'Explore global virtual credit card platforms and compare issuance fees, funding rates, monthly costs, supported currencies, and use cases for advertising, subscriptions, and cross-border payments.' },
   'site.subtitle': { zh: '发现全球最佳虚拟信用卡平台', en: 'Discover the Best Virtual Credit Card Platforms' },
 
   // Navigation
@@ -58,7 +58,7 @@ const translations = {
 
   // Content
   'content.title': { zh: '内容中心', en: 'Content Hub' },
-  'content.desc': { zh: '虚拟卡平台指南、费率说明和使用教程', en: 'Guides, fee explainers, and tutorials for virtual cards' },
+  'content.desc': { zh: '阅读虚拟信用卡平台评测、费率说明、开户与充值教程，了解不同虚拟卡的 KYC 要求、支持币种、使用场景和风险提示。', en: 'Read virtual credit card platform reviews, fee explainers, setup and funding tutorials, with guidance on KYC, supported currencies, use cases, and potential risks.' },
   'content.latest': { zh: '最新内容', en: 'Latest Content' },
   'content.read_more': { zh: '阅读全文', en: 'Read More' },
   'content.no_results': { zh: '暂无内容', en: 'No content yet' },

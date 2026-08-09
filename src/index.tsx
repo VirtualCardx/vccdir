@@ -8,6 +8,26 @@ import type { Provider, Card, Tag, ProviderWithTags, CardWithProvider, ContentPo
 type Env = { Bindings: CloudflareBindings };
 const app = new Hono<Env>();
 
+// Keep every public indexing signal on the configured www origin. Cloudflare may
+// route both hostnames to this Worker, so normalize the bare domain here as a
+// safety net even when an edge redirect rule has not been configured yet.
+app.use('*', async (c, next) => {
+  const configured = c.env.SITE_URL?.replace(/\/+$/, '');
+  if (configured) {
+    const canonical = new URL(configured);
+    const requested = new URL(c.req.url);
+    const bareCanonicalHost = canonical.hostname.replace(/^www\./, '');
+
+    if (canonical.hostname.startsWith('www.') && requested.hostname === bareCanonicalHost) {
+      requested.protocol = canonical.protocol;
+      requested.host = canonical.host;
+      return c.redirect(requested.toString(), 301);
+    }
+  }
+
+  await next();
+});
+
 // ==========================================
 // Helpers
 // ==========================================
@@ -152,7 +172,23 @@ function providerName(p: Provider | { name_zh: string; name_en: string }, lang: 
 }
 
 function providerDesc(p: Provider, lang: Lang): string {
-  return (lang === 'zh' ? p.desc_zh : p.desc_en) || '';
+  const description = (lang === 'zh' ? p.desc_zh : p.desc_en)?.trim();
+  const name = providerName(p, lang);
+  const fallback = lang === 'zh'
+    ? `查看${name}虚拟信用卡平台的开卡方式、费率、KYC要求、支持地区和可用卡段，并与其他虚拟卡平台进行对比。`
+    : `Review ${name} virtual card issuance, fees, KYC requirements, supported regions, and available cards, then compare it with other VCC platforms.`;
+  if (!description) return fallback;
+  return description.length < 70 ? `${description}${/[。.!?]$/.test(description) ? '' : '。'}${fallback}` : description;
+}
+
+function cardMetaDescription(card: CardWithProvider, lang: Lang): string {
+  const description = card.description?.trim();
+  const name = lang === 'zh' ? card.provider_name_zh : card.provider_name_en;
+  const fallback = lang === 'zh'
+    ? `了解${name} ${card.card_type} 虚拟卡（BIN ${card.bin}）的开卡费、充值费率、月费、支持币种、额度和适用场景，并与其他虚拟信用卡进行比较。`
+    : `Explore the ${name} ${card.card_type} virtual card (BIN ${card.bin}), including issuance fees, funding rates, monthly costs, currency, limits, and supported use cases.`;
+  if (!description) return fallback;
+  return description.length < 70 ? `${description}${/[。.!?]$/.test(description) ? '' : '。'}${fallback}` : description;
 }
 
 function contentTitle(post: ContentPost, lang: Lang): string {
@@ -160,7 +196,13 @@ function contentTitle(post: ContentPost, lang: Lang): string {
 }
 
 function contentExcerpt(post: ContentPost, lang: Lang): string {
-  return (lang === 'zh' ? post.excerpt_zh : post.excerpt_en) || '';
+  const excerpt = (lang === 'zh' ? post.excerpt_zh : post.excerpt_en)?.trim();
+  const title = contentTitle(post, lang);
+  const fallback = lang === 'zh'
+    ? `深入了解${title}的费率、申请或使用方式、适用场景和注意事项，帮助你比较并选择合适的虚拟信用卡服务。`
+    : `Learn about ${title}, including fees, setup or usage, suitable use cases, and important considerations when comparing virtual card services.`;
+  if (!excerpt) return fallback;
+  return excerpt.length < 70 ? `${excerpt}${/[。.!?]$/.test(excerpt) ? '' : '。'}${fallback}` : excerpt;
 }
 
 function contentBody(post: ContentPost, lang: Lang): string {
@@ -246,6 +288,47 @@ function nullableStringField(body: Record<string, unknown>, key: string): string
 
 function normalizeContentStatus(value: string): string {
   return value === 'published' ? 'published' : 'draft';
+}
+
+function normalizeActiveStatus(value: string): string {
+  return value === 'inactive' ? 'inactive' : 'active';
+}
+
+function numberField(body: Record<string, unknown>, key: string, fallback = 0): number {
+  const value = body[key];
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function optionalNumberField(body: Record<string, unknown>, key: string): number | null {
+  const value = body[key];
+  if (value === undefined || value === null || value === '') return null;
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function numberArrayField(body: Record<string, unknown>, key: string): number[] | null {
+  const value = body[key];
+  if (!Array.isArray(value)) return null;
+  return value.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0);
+}
+
+async function apiProviderWithTags(db: D1Database, provider: Provider): Promise<ProviderWithTags> {
+  const [tags, cardCount] = await Promise.all([
+    db.prepare(
+      'SELECT t.* FROM vcc_tags t INNER JOIN vcc_provider_tags pt ON t.id = pt.tag_id WHERE pt.provider_id = ? ORDER BY t.category, t.id'
+    ).bind(provider.id).all<Tag>(),
+    db.prepare('SELECT COUNT(*) as c FROM vcc_cards WHERE provider_id = ?').bind(provider.id).first<{ c: number }>(),
+  ]);
+  return { ...provider, tags: tags.results, card_count: cardCount?.c || 0 };
+}
+
+async function updateProviderTags(db: D1Database, providerId: number, tagIds: number[] | null): Promise<void> {
+  if (!tagIds) return;
+  await db.prepare('DELETE FROM vcc_provider_tags WHERE provider_id = ?').bind(providerId).run();
+  for (const tagId of tagIds) {
+    await db.prepare('INSERT OR IGNORE INTO vcc_provider_tags (provider_id, tag_id) VALUES (?, ?)').bind(providerId, tagId).run();
+  }
 }
 
 function siteOrigin(c: Context<Env>): string {
@@ -374,7 +457,7 @@ app.get('/api/admin/content/:id', async (c) => {
 });
 
 app.post('/api/admin/content', async (c) => {
-  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
   const titleZh = stringField(body, 'title_zh');
   const titleEn = stringField(body, 'title_en', titleZh);
   const bodyZh = stringField(body, 'body_zh');
@@ -403,7 +486,7 @@ app.put('/api/admin/content/:id', async (c) => {
   const existing = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(id).first<ContentPost>();
   if (!existing) return c.json({ error: 'Content not found' }, 404);
 
-  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
   const status = normalizeContentStatus(stringField(body, 'status', existing.status));
   const publishedAt = status === 'published'
     ? (stringField(body, 'published_at') || existing.published_at || new Date().toISOString())
@@ -430,6 +513,246 @@ app.put('/api/admin/content/:id', async (c) => {
 
 app.delete('/api/admin/content/:id', async (c) => {
   await c.env.DB.prepare('DELETE FROM content_posts WHERE id = ?').bind(c.req.param('id')).run();
+  return c.json({ ok: true });
+});
+
+app.get('/api/admin/providers', async (c) => {
+  const status = c.req.query('status');
+  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const params: unknown[] = [];
+  let query = 'SELECT * FROM vcc_providers';
+
+  if (status === 'active' || status === 'inactive') {
+    query += ' WHERE status = ?';
+    params.push(status);
+  }
+
+  query += ' ORDER BY updated_at DESC LIMIT ?';
+  params.push(limit);
+
+  const providers = await c.env.DB.prepare(query).bind(...params).all<Provider>();
+  const results = await Promise.all(providers.results.map((provider) => apiProviderWithTags(c.env.DB, provider)));
+  return c.json({ results });
+});
+
+app.get('/api/admin/providers/:id', async (c) => {
+  const provider = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(c.req.param('id')).first<Provider>();
+  if (!provider) return c.json({ error: 'Provider not found' }, 404);
+  return c.json(await apiProviderWithTags(c.env.DB, provider));
+});
+
+app.post('/api/admin/providers', async (c) => {
+  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const nameZh = stringField(body, 'name_zh');
+  const nameEn = stringField(body, 'name_en', nameZh);
+  const slug = stringField(body, 'slug') || generateSlug(nameEn || nameZh);
+  if (!nameZh || !nameEn || !slug) return c.json({ error: 'name_zh, name_en, and slug are required' }, 400);
+
+  const result = await c.env.DB.prepare(
+    'INSERT INTO vcc_providers (name_zh, name_en, website, founded_date, apply_method, desc_zh, desc_en, need_kyc, region, status, logo_url, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(
+    nameZh,
+    nameEn,
+    nullableStringField(body, 'website'),
+    nullableStringField(body, 'founded_date'),
+    nullableStringField(body, 'apply_method'),
+    nullableStringField(body, 'desc_zh'),
+    nullableStringField(body, 'desc_en'),
+    numberField(body, 'need_kyc', 0) ? 1 : 0,
+    nullableStringField(body, 'region'),
+    normalizeActiveStatus(stringField(body, 'status')),
+    nullableStringField(body, 'logo_url'),
+    slug
+  ).run();
+
+  const providerId = Number(result.meta.last_row_id);
+  await updateProviderTags(c.env.DB, providerId, numberArrayField(body, 'tag_ids'));
+  const provider = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(providerId).first<Provider>();
+  return c.json(provider ? await apiProviderWithTags(c.env.DB, provider) : null, 201);
+});
+
+app.put('/api/admin/providers/:id', async (c) => {
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(id).first<Provider>();
+  if (!existing) return c.json({ error: 'Provider not found' }, 404);
+
+  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  await c.env.DB.prepare(
+    `UPDATE vcc_providers SET name_zh = ?, name_en = ?, website = ?, founded_date = ?, apply_method = ?, desc_zh = ?, desc_en = ?, need_kyc = ?, region = ?, status = ?, logo_url = ?, slug = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(
+    stringField(body, 'name_zh', existing.name_zh),
+    stringField(body, 'name_en', existing.name_en),
+    nullableStringField(body, 'website') ?? existing.website,
+    nullableStringField(body, 'founded_date') ?? existing.founded_date,
+    nullableStringField(body, 'apply_method') ?? existing.apply_method,
+    nullableStringField(body, 'desc_zh') ?? existing.desc_zh,
+    nullableStringField(body, 'desc_en') ?? existing.desc_en,
+    body['need_kyc'] === undefined ? existing.need_kyc : (numberField(body, 'need_kyc', existing.need_kyc) ? 1 : 0),
+    nullableStringField(body, 'region') ?? existing.region,
+    normalizeActiveStatus(stringField(body, 'status', existing.status)),
+    nullableStringField(body, 'logo_url') ?? existing.logo_url,
+    stringField(body, 'slug', existing.slug),
+    id
+  ).run();
+
+  await updateProviderTags(c.env.DB, Number(id), numberArrayField(body, 'tag_ids'));
+  const provider = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(id).first<Provider>();
+  return c.json(provider ? await apiProviderWithTags(c.env.DB, provider) : null);
+});
+
+app.delete('/api/admin/providers/:id', async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM vcc_provider_tags WHERE provider_id = ?').bind(id).run();
+  await c.env.DB.prepare('DELETE FROM vcc_cards WHERE provider_id = ?').bind(id).run();
+  await c.env.DB.prepare('DELETE FROM vcc_providers WHERE id = ?').bind(id).run();
+  return c.json({ ok: true });
+});
+
+app.get('/api/admin/cards', async (c) => {
+  const status = c.req.query('status');
+  const providerId = c.req.query('provider_id');
+  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const params: unknown[] = [];
+  let query = 'SELECT * FROM vcc_cards';
+  const where: string[] = [];
+
+  if (status === 'active' || status === 'inactive') {
+    where.push('status = ?');
+    params.push(status);
+  }
+  if (providerId) {
+    where.push('provider_id = ?');
+    params.push(providerId);
+  }
+  if (where.length) query += ` WHERE ${where.join(' AND ')}`;
+  query += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(limit);
+
+  const cards = await c.env.DB.prepare(query).bind(...params).all<Card>();
+  return c.json({ results: cards.results });
+});
+
+app.get('/api/admin/cards/:id', async (c) => {
+  const card = await c.env.DB.prepare('SELECT * FROM vcc_cards WHERE id = ?').bind(c.req.param('id')).first<Card>();
+  if (!card) return c.json({ error: 'Card not found' }, 404);
+  return c.json(card);
+});
+
+app.post('/api/admin/cards', async (c) => {
+  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const providerId = optionalNumberField(body, 'provider_id');
+  const bin = stringField(body, 'bin');
+  const cardType = stringField(body, 'card_type');
+  if (!providerId || !bin || !cardType) return c.json({ error: 'provider_id, bin, and card_type are required' }, 400);
+
+  let slug = stringField(body, 'slug');
+  if (!slug) {
+    const provider = await c.env.DB.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(providerId).first<{ slug: string }>();
+    slug = `${provider?.slug || 'card'}-${bin}`;
+  }
+
+  const result = await c.env.DB.prepare(
+    'INSERT INTO vcc_cards (provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(
+    providerId,
+    bin,
+    cardType,
+    stringField(body, 'currency', 'USD'),
+    numberField(body, 'issuance_fee', 0),
+    numberField(body, 'fee_rate', 0),
+    numberField(body, 'monthly_fee', 0),
+    numberField(body, 'initial_load', 0),
+    nullableStringField(body, 'quota'),
+    nullableStringField(body, 'usage'),
+    nullableStringField(body, 'description'),
+    normalizeActiveStatus(stringField(body, 'status')),
+    slug
+  ).run();
+
+  const card = await c.env.DB.prepare('SELECT * FROM vcc_cards WHERE id = ?').bind(result.meta.last_row_id).first<Card>();
+  return c.json(card, 201);
+});
+
+app.put('/api/admin/cards/:id', async (c) => {
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare('SELECT * FROM vcc_cards WHERE id = ?').bind(id).first<Card>();
+  if (!existing) return c.json({ error: 'Card not found' }, 404);
+
+  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  await c.env.DB.prepare(
+    'UPDATE vcc_cards SET provider_id = ?, bin = ?, card_type = ?, currency = ?, issuance_fee = ?, fee_rate = ?, monthly_fee = ?, initial_load = ?, quota = ?, usage = ?, description = ?, status = ?, slug = ? WHERE id = ?'
+  ).bind(
+    optionalNumberField(body, 'provider_id') ?? existing.provider_id,
+    stringField(body, 'bin', existing.bin),
+    stringField(body, 'card_type', existing.card_type),
+    stringField(body, 'currency', existing.currency),
+    numberField(body, 'issuance_fee', existing.issuance_fee),
+    numberField(body, 'fee_rate', existing.fee_rate),
+    numberField(body, 'monthly_fee', existing.monthly_fee),
+    numberField(body, 'initial_load', existing.initial_load),
+    nullableStringField(body, 'quota') ?? existing.quota,
+    nullableStringField(body, 'usage') ?? existing.usage,
+    nullableStringField(body, 'description') ?? existing.description,
+    normalizeActiveStatus(stringField(body, 'status', existing.status)),
+    stringField(body, 'slug', existing.slug),
+    id
+  ).run();
+
+  const card = await c.env.DB.prepare('SELECT * FROM vcc_cards WHERE id = ?').bind(id).first<Card>();
+  return c.json(card);
+});
+
+app.delete('/api/admin/cards/:id', async (c) => {
+  await c.env.DB.prepare('DELETE FROM vcc_cards WHERE id = ?').bind(c.req.param('id')).run();
+  return c.json({ ok: true });
+});
+
+app.get('/api/admin/tags', async (c) => {
+  const tags = await c.env.DB.prepare('SELECT * FROM vcc_tags ORDER BY category, id').all<Tag>();
+  return c.json({ results: tags.results });
+});
+
+app.get('/api/admin/tags/:id', async (c) => {
+  const tag = await c.env.DB.prepare('SELECT * FROM vcc_tags WHERE id = ?').bind(c.req.param('id')).first<Tag>();
+  if (!tag) return c.json({ error: 'Tag not found' }, 404);
+  return c.json(tag);
+});
+
+app.post('/api/admin/tags', async (c) => {
+  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const nameZh = stringField(body, 'name_zh');
+  const nameEn = stringField(body, 'name_en', nameZh);
+  if (!nameZh || !nameEn) return c.json({ error: 'name_zh and name_en are required' }, 400);
+
+  const result = await c.env.DB.prepare('INSERT INTO vcc_tags (name_zh, name_en, category) VALUES (?, ?, ?)').bind(
+    nameZh,
+    nameEn,
+    nullableStringField(body, 'category')
+  ).run();
+  const tag = await c.env.DB.prepare('SELECT * FROM vcc_tags WHERE id = ?').bind(result.meta.last_row_id).first<Tag>();
+  return c.json(tag, 201);
+});
+
+app.put('/api/admin/tags/:id', async (c) => {
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare('SELECT * FROM vcc_tags WHERE id = ?').bind(id).first<Tag>();
+  if (!existing) return c.json({ error: 'Tag not found' }, 404);
+
+  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  await c.env.DB.prepare('UPDATE vcc_tags SET name_zh = ?, name_en = ?, category = ? WHERE id = ?').bind(
+    stringField(body, 'name_zh', existing.name_zh),
+    stringField(body, 'name_en', existing.name_en),
+    nullableStringField(body, 'category') ?? existing.category,
+    id
+  ).run();
+  const tag = await c.env.DB.prepare('SELECT * FROM vcc_tags WHERE id = ?').bind(id).first<Tag>();
+  return c.json(tag);
+});
+
+app.delete('/api/admin/tags/:id', async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM vcc_provider_tags WHERE tag_id = ?').bind(id).run();
+  await c.env.DB.prepare('DELETE FROM vcc_tags WHERE id = ?').bind(id).run();
   return c.json({ ok: true });
 });
 
@@ -832,7 +1155,7 @@ app.get('/card/:slug', async (c) => {
       '@context': 'https://schema.org',
       '@type': 'FinancialProduct',
       name: `${card.card_type} ${card.bin}`,
-      description: card.description || `${pName} ${card.card_type} ${card.bin}`,
+      description: cardMetaDescription(card, lang),
       url: absoluteUrl(c, `/card/${card.slug}`),
       provider: { '@type': 'Organization', name: card.provider_name_en },
       offers: {
@@ -844,7 +1167,7 @@ app.get('/card/:slug', async (c) => {
   ];
 
   return c.html(
-    <Layout title={`${card.card_type} ${card.bin}`} description={card.description || `${pName} ${card.card_type} ${card.bin}`} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/card/${card.slug}`)} jsonLd={jsonLd}>
+    <Layout title={`${card.card_type} ${card.bin}`} description={cardMetaDescription(card, lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/card/${card.slug}`)} jsonLd={jsonLd}>
       <div class="max-w-4xl mx-auto px-4 py-8">
         <nav class="mb-6 text-sm text-gray-500">
           <a href="/" class="hover:text-brand-600">{t('nav.home', lang)}</a>

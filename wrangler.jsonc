@@ -5,17 +5,27 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"workers_dev": true,
+	"preview_urls": true,
+	"keep_vars": true,
+	"routes": [
+		{
+			"pattern": "vccdir.com",
+			"custom_domain": true
+		},
+		{
+			"pattern": "www.vccdir.com",
+			"custom_domain": true
+		}
+	],
 	"vars": {
-		"ADMIN_PASSWORD": "change-me-in-production",
-		"SESSION_SECRET": "change-me-in-production",
-		"HERMES_API_TOKEN": "change-me-in-production",
-		"SITE_URL": "https://vccdir.com"
+		"SITE_URL": "https://www.vccdir.com"
 	},
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "vcc-db",
-			"database_id": "your-d1-database_id"
+			"database_id": "47873b10-eeb7-41ed-bad4-1920febdc877"
 		}
 	],
 	"r2_buckets": [

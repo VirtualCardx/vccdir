@@ -2,7 +2,7 @@
 import type { Context } from 'hono';
 import { Layout } from './layout';
 import { t, langPath, pathLang } from './i18n';
-import { Pagination, CardTile, ArticleTile, ProviderTile } from './components';
+import { Pagination, CardTile, ArticleTile, ProviderTile, SearchForm, EmptyState, Icon } from './components';
 import { apiProvidersWithTags } from './lib/db';
 import {
   siteOrigin, absoluteUrl, baseJsonLd, breadcrumbJsonLd, publicPageNumber, pageUrl,
@@ -46,7 +46,7 @@ export async function homePage(c: Context<Env>) {
   ];
 
   return c.html(
-    <Layout title={t('home.hero.title', lang)} description={t('site.description', lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, '/'))} alternates={{ zh: absoluteUrl(c, '/'), en: absoluteUrl(c, '/en') }} jsonLd={jsonLd}>
+    <Layout title={t('home.hero.title', lang)} description={t('site.description', lang)} lang={lang} active="home" canonicalUrl={absoluteUrl(c, langPath(lang, '/'))} alternates={{ zh: absoluteUrl(c, '/'), en: absoluteUrl(c, '/en') }} jsonLd={jsonLd}>
       <section class="relative overflow-hidden bg-slate-950 text-white">
         <div class="absolute inset-0" style="background-image: radial-gradient(circle at 12% 10%, rgba(99,102,241,.52), transparent 30rem), radial-gradient(circle at 88% 65%, rgba(6,182,212,.3), transparent 30rem);"></div>
         <div class="absolute inset-0 opacity-[.08]" style="background-image: linear-gradient(rgba(255,255,255,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.6) 1px, transparent 1px); background-size: 44px 44px;"></div>
@@ -62,7 +62,7 @@ export async function homePage(c: Context<Env>) {
           </div>
           <div class="relative mx-auto hidden w-full max-w-md lg:block" aria-hidden="true">
             <div class="absolute -inset-10 rounded-full bg-brand-500/20 blur-3xl"></div>
-            <div class="relative rotate-2 rounded-[2rem] border border-white/15 bg-white/10 p-3 shadow-2xl shadow-black/30 backdrop-blur-xl">
+            <div class="hero-float relative rounded-[2rem] border border-white/15 bg-white/10 p-3 shadow-2xl shadow-black/30 backdrop-blur-xl">
               <div class="rounded-[1.4rem] border border-white/10 bg-gradient-to-br from-brand-600/90 via-brand-700/90 to-slate-900 p-7">
                 <div class="flex items-center justify-between"><span class="text-sm font-bold tracking-wide text-white">VCC DIRECTORY</span><span class="rounded-lg border border-white/15 bg-white/10 px-2.5 py-1 text-[10px] font-bold tracking-widest text-accent-100">VIRTUAL</span></div>
                 <div class="mt-14 font-mono text-2xl font-semibold tracking-[.12em] text-white">{homepageCards.results[0]?.bin || '•••• ••••'}</div>
@@ -81,26 +81,26 @@ export async function homePage(c: Context<Env>) {
             { label: t('home.stats.cards', lang), value: stats?.cards || 0 },
             { label: t('home.stats.tags', lang), value: stats?.tags || 0 },
           ].map((stat, index) => (
-            <div class={`px-3 py-5 text-center sm:p-6 ${index > 0 ? 'border-l border-slate-100' : ''}`}><div class="text-2xl font-black tracking-tight text-brand-600 sm:text-3xl">{stat.value}</div><div class="mt-1 text-[11px] font-medium text-slate-500 sm:text-sm">{stat.label}</div></div>
+            <div class={`px-3 py-5 text-center sm:p-6 ${index > 0 ? 'border-l border-slate-100' : ''}`}><div class="text-2xl font-black tabular-nums tracking-tight text-brand-600 sm:text-3xl">{stat.value}</div><div class="mt-1 text-[11px] font-medium text-slate-500 sm:text-sm">{stat.label}</div></div>
           ))}
         </div>
       </section>
 
       <section class="page-shell py-16 sm:py-20">
-        <div class="mb-8 flex items-end justify-between gap-4"><div><p class="eyebrow mb-2">PLATFORMS</p><h2 class="section-title">{t('home.providers', lang)}</h2></div><a href={langPath(lang, '/providers')} class="hidden rounded-xl bg-brand-50 px-4 py-2 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100 sm:block">{t('home.view_all_providers', lang)} &rarr;</a></div>
-        {platforms.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{platforms.map((provider) => <ProviderTile provider={provider} lang={lang} />)}</div> : <div class="empty-state">{t('home.no_results', lang)}</div>}
+        <div class="mb-8 flex flex-wrap items-end justify-between gap-4"><div><p class="eyebrow mb-2">PLATFORMS</p><h2 class="section-title">{t('home.providers', lang)}</h2></div><a href={langPath(lang, '/providers')} class="rounded-xl bg-brand-50 px-4 py-2 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100">{t('home.view_all_providers', lang)} &rarr;</a></div>
+        {platforms.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{platforms.map((provider) => <ProviderTile provider={provider} lang={lang} />)}</div> : <EmptyState>{t('home.no_results', lang)}</EmptyState>}
       </section>
 
       <section class="border-b border-slate-200/70 bg-white/50">
         <div class="page-shell py-16 sm:py-20">
-          <div class="mb-8 flex items-end justify-between gap-4"><div><p class="eyebrow mb-2">VIRTUAL CARDS</p><h2 class="section-title">{t('home.cards', lang)}</h2></div><a href={langPath(lang, '/cards')} class="hidden rounded-xl bg-brand-50 px-4 py-2 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100 sm:block">{t('home.view_all_cards', lang)} &rarr;</a></div>
+          <div class="mb-8 flex flex-wrap items-end justify-between gap-4"><div><p class="eyebrow mb-2">VIRTUAL CARDS</p><h2 class="section-title">{t('home.cards', lang)}</h2></div><a href={langPath(lang, '/cards')} class="rounded-xl bg-brand-50 px-4 py-2 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100">{t('home.view_all_cards', lang)} &rarr;</a></div>
           <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{homepageCards.results.map((card) => <CardTile card={card} lang={lang} />)}</div>
         </div>
       </section>
 
       <section class="page-shell py-16 sm:py-20">
-        <div class="mb-8 flex items-end justify-between gap-4"><div><p class="eyebrow mb-2">INDUSTRY NEWS</p><h2 class="section-title">{t('home.posts', lang)}</h2></div><a href={langPath(lang, '/content')} class="hidden rounded-xl bg-brand-50 px-4 py-2 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100 sm:block">{t('home.view_all_posts', lang)} &rarr;</a></div>
-        {homepagePosts.results.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{homepagePosts.results.map((post) => <ArticleTile post={post} lang={lang} />)}</div> : <div class="empty-state">{t('content.no_results', lang)}</div>}
+        <div class="mb-8 flex flex-wrap items-end justify-between gap-4"><div><p class="eyebrow mb-2">INDUSTRY NEWS</p><h2 class="section-title">{t('home.posts', lang)}</h2></div><a href={langPath(lang, '/content')} class="rounded-xl bg-brand-50 px-4 py-2 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100">{t('home.view_all_posts', lang)} &rarr;</a></div>
+        {homepagePosts.results.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{homepagePosts.results.map((post) => <ArticleTile post={post} lang={lang} />)}</div> : <EmptyState>{t('content.no_results', lang)}</EmptyState>}
       </section>
     </Layout>
   );
@@ -135,7 +135,7 @@ export async function cardsPage(c: Context<Env>) {
   const total = countRow?.c || 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   if (page > totalPages) {
-    return c.html(<Layout title={t('cards.title', lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, '/cards'))} noIndex><div class="page-shell py-20"><div class="empty-state">{t('cards.no_results', lang)}</div></div></Layout>, 404);
+    return c.html(<Layout title={t('cards.title', lang)} lang={lang} active="cards" canonicalUrl={absoluteUrl(c, langPath(lang, '/cards'))} noIndex><div class="page-shell py-20"><EmptyState>{t('cards.no_results', lang)}</EmptyState></div></Layout>, 404);
   }
 
   const canonicalPath = langPath(lang, search ? '/cards' : pageUrl('/cards', page));
@@ -154,6 +154,7 @@ export async function cardsPage(c: Context<Env>) {
       title={title}
       description={t('cards.desc', lang)}
       lang={lang}
+      active="cards"
       canonicalUrl={absoluteUrl(c, canonicalPath)}
       alternates={search ? undefined : { zh: absoluteUrl(c, '/cards'), en: absoluteUrl(c, '/en/cards') }}
       noIndex={Boolean(search)}
@@ -167,17 +168,13 @@ export async function cardsPage(c: Context<Env>) {
           <nav class="mb-6 text-sm font-medium text-slate-400"><a href={langPath(lang, '/')} class="hover:text-brand-600">{t('nav.home', lang)}</a><span class="mx-2 text-slate-300">/</span><span>{t('cards.title', lang)}</span></nav>
           <div class="flex flex-col gap-7 lg:flex-row lg:items-end lg:justify-between">
             <div><p class="eyebrow mb-2">VCC CATALOG</p><h1 class="text-3xl font-bold tracking-tight text-slate-950 md:text-5xl">{t('cards.title', lang)}</h1><p class="mt-4 max-w-2xl leading-7 text-slate-500">{t('cards.desc', lang)}</p></div>
-            <form method="get" action={langPath(lang, '/cards')} class="flex w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-soft focus-within:border-brand-300 focus-within:ring-4 focus-within:ring-brand-100/70">
-              <label for="card-search" class="sr-only">{t('cards.search', lang)}</label>
-              <input id="card-search" type="search" name="q" value={search} placeholder={t('cards.search', lang)} class="min-w-0 flex-1 bg-transparent px-4 py-3 text-slate-900 outline-none placeholder:text-slate-400" />
-              <button type="submit" class="rounded-xl bg-brand-600 px-5 py-3 font-bold text-white shadow-lg shadow-brand-600/20 transition-colors hover:bg-brand-700">{lang === 'zh' ? '搜索' : 'Search'}</button>
-            </form>
+            <SearchForm action={langPath(lang, '/cards')} inputId="card-search" placeholder={t('cards.search', lang)} value={search} lang={lang} />
           </div>
         </div>
       </section>
       <section class="page-shell py-12 sm:py-14">
         <div class="mb-7 flex items-center justify-between gap-3"><p class="text-sm text-slate-500"><span class="font-bold text-slate-950">{total}</span> {t('cards.results', lang)}</p>{search && <a href={langPath(lang, '/cards')} class="rounded-lg bg-brand-50 px-3 py-1.5 text-sm font-bold text-brand-700 hover:bg-brand-100">{lang === 'zh' ? '清除搜索' : 'Clear search'}</a>}</div>
-        {cardRows.results.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{cardRows.results.map((card) => <CardTile card={card} lang={lang} />)}</div> : <div class="empty-state">{t('cards.no_results', lang)}</div>}
+        {cardRows.results.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{cardRows.results.map((card) => <CardTile card={card} lang={lang} />)}</div> : <EmptyState>{t('cards.no_results', lang)}</EmptyState>}
         <Pagination path={langPath(lang, '/cards')} page={page} totalPages={totalPages} query={{ q: search }} lang={lang} />
       </section>
     </Layout>
@@ -210,7 +207,7 @@ export async function providersPage(c: Context<Env>) {
   const total = countRow?.c || 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   if (page > totalPages) {
-    return c.html(<Layout title={t('providers.title', lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, '/providers'))} noIndex><div class="page-shell py-20"><div class="empty-state">{t('providers.no_results', lang)}</div></div></Layout>, 404);
+    return c.html(<Layout title={t('providers.title', lang)} lang={lang} active="providers" canonicalUrl={absoluteUrl(c, langPath(lang, '/providers'))} noIndex><div class="page-shell py-20"><EmptyState>{t('providers.no_results', lang)}</EmptyState></div></Layout>, 404);
   }
   const providers = await apiProvidersWithTags(c.env.DB, providerRows.results, true);
 
@@ -230,6 +227,7 @@ export async function providersPage(c: Context<Env>) {
       title={title}
       description={t('providers.desc', lang)}
       lang={lang}
+      active="providers"
       canonicalUrl={absoluteUrl(c, canonicalPath)}
       alternates={search ? undefined : { zh: absoluteUrl(c, '/providers'), en: absoluteUrl(c, '/en/providers') }}
       noIndex={Boolean(search)}
@@ -243,17 +241,13 @@ export async function providersPage(c: Context<Env>) {
           <nav class="mb-6 text-sm font-medium text-slate-400"><a href={langPath(lang, '/')} class="hover:text-brand-600">{t('nav.home', lang)}</a><span class="mx-2 text-slate-300">/</span><span>{t('providers.title', lang)}</span></nav>
           <div class="flex flex-col gap-7 lg:flex-row lg:items-end lg:justify-between">
             <div><p class="eyebrow mb-2">VCC PLATFORMS</p><h1 class="text-3xl font-bold tracking-tight text-slate-950 md:text-5xl">{t('providers.title', lang)}</h1><p class="mt-4 max-w-2xl leading-7 text-slate-500">{t('providers.desc', lang)}</p></div>
-            <form method="get" action={langPath(lang, '/providers')} class="flex w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-soft focus-within:border-brand-300 focus-within:ring-4 focus-within:ring-brand-100/70">
-              <label for="provider-search" class="sr-only">{t('providers.search', lang)}</label>
-              <input id="provider-search" type="search" name="q" value={search} placeholder={t('providers.search', lang)} class="min-w-0 flex-1 bg-transparent px-4 py-3 text-slate-900 outline-none placeholder:text-slate-400" />
-              <button type="submit" class="rounded-xl bg-brand-600 px-5 py-3 font-bold text-white shadow-lg shadow-brand-600/20 transition-colors hover:bg-brand-700">{lang === 'zh' ? '搜索' : 'Search'}</button>
-            </form>
+            <SearchForm action={langPath(lang, '/providers')} inputId="provider-search" placeholder={t('providers.search', lang)} value={search} lang={lang} />
           </div>
         </div>
       </section>
       <section class="page-shell py-12 sm:py-14">
         <div class="mb-7 flex items-center justify-between gap-3"><p class="text-sm text-slate-500"><span class="font-bold text-slate-950">{total}</span> {t('providers.results', lang)}</p>{search && <a href={langPath(lang, '/providers')} class="rounded-lg bg-brand-50 px-3 py-1.5 text-sm font-bold text-brand-700 hover:bg-brand-100">{lang === 'zh' ? '清除搜索' : 'Clear search'}</a>}</div>
-        {providers.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{providers.map((provider) => <ProviderTile provider={provider} lang={lang} />)}</div> : <div class="empty-state">{t('providers.no_results', lang)}</div>}
+        {providers.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{providers.map((provider) => <ProviderTile provider={provider} lang={lang} />)}</div> : <EmptyState>{t('providers.no_results', lang)}</EmptyState>}
         <Pagination path={langPath(lang, '/providers')} page={page} totalPages={totalPages} query={{ q: search }} lang={lang} />
       </section>
     </Layout>
@@ -271,7 +265,7 @@ export async function providerPage(c: Context<Env>) {
   const provider = await db.prepare('SELECT * FROM vcc_providers WHERE slug = ? AND status = ?').bind(slug, 'active').first<Provider>();
   if (!provider) {
     return c.html(
-      <Layout title={t('provider.not_found', lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, `/provider/${slug}`))} noIndex>
+      <Layout title={t('provider.not_found', lang)} lang={lang} active="providers" canonicalUrl={absoluteUrl(c, langPath(lang, `/provider/${slug}`))} noIndex>
         <div class="max-w-7xl mx-auto px-4 py-16 text-center">
           <h1 class="mb-4 text-2xl font-bold text-slate-900">{t('provider.not_found', lang)}</h1>
           <a href={langPath(lang, '/')} class="text-brand-600 hover:underline">{t('provider.back', lang)}</a>
@@ -285,6 +279,7 @@ export async function providerPage(c: Context<Env>) {
     db.prepare('SELECT * FROM vcc_cards WHERE provider_id = ? AND status = ? ORDER BY issuance_fee ASC').bind(provider.id, 'active').all<Card>(),
     db.prepare('SELECT t.* FROM vcc_tags t INNER JOIN vcc_provider_tags pt ON t.id = pt.tag_id WHERE pt.provider_id = ?').bind(provider.id).all<Tag>(),
   ]);
+  const rawDescription = (lang === 'zh' ? provider.desc_zh : provider.desc_en)?.trim();
 
   const jsonLd = [
     ...baseJsonLd(c, lang),
@@ -315,7 +310,7 @@ export async function providerPage(c: Context<Env>) {
   ];
 
   return c.html(
-    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, `/provider/${provider.slug}`))} alternates={{ zh: absoluteUrl(c, `/provider/${provider.slug}`), en: absoluteUrl(c, `/en/provider/${provider.slug}`) }} jsonLd={jsonLd}>
+    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} active="providers" canonicalUrl={absoluteUrl(c, langPath(lang, `/provider/${provider.slug}`))} alternates={{ zh: absoluteUrl(c, `/provider/${provider.slug}`), en: absoluteUrl(c, `/en/provider/${provider.slug}`) }} jsonLd={jsonLd}>
       <div class="page-shell py-10 sm:py-14">
         {/* Breadcrumb */}
         <nav class="breadcrumb mb-6">
@@ -325,8 +320,7 @@ export async function providerPage(c: Context<Env>) {
         </nav>
 
         {/* Provider Header */}
-        <div class="surface-card relative mb-10 overflow-hidden p-6 sm:p-8">
-          <div class="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-brand-500 to-accent-400"></div>
+        <div class="surface-card mb-10 p-6 sm:p-8">
           <div class="flex flex-col items-start gap-5 sm:flex-row">
             {provider.logo_url ? (
               <img src={`/images/${provider.logo_url}`} alt={providerName(provider, lang)} class="h-16 w-16 rounded-2xl object-cover shadow-md ring-1 ring-slate-100" />
@@ -337,7 +331,11 @@ export async function providerPage(c: Context<Env>) {
             )}
             <div class="flex-1">
               <h1 class="mb-2 text-3xl font-bold tracking-tight text-slate-950">{providerName(provider, lang)}</h1>
-              <p class="mb-5 max-w-3xl leading-7 text-slate-500">{providerDesc(provider, lang)}</p>
+              {rawDescription ? (
+                <div class="content-prose mb-5 max-w-3xl text-[.95rem] leading-7 text-slate-500" dangerouslySetInnerHTML={{ __html: contentBodyHtml(rawDescription) }} />
+              ) : (
+                <p class="mb-5 max-w-3xl leading-7 text-slate-500">{providerDesc(provider, lang)}</p>
+              )}
               <div class="flex flex-wrap gap-2 mb-4">
                 {providerTags.results.map((tag) => (
                   <span class="px-2.5 py-1 bg-brand-50 text-brand-600 rounded-full text-xs font-medium">{tagName(tag, lang)}</span>
@@ -350,24 +348,24 @@ export async function providerPage(c: Context<Env>) {
           <div class="mt-7 grid grid-cols-2 gap-3 border-t border-slate-100 pt-7 md:grid-cols-4">
             {provider.website && (
               <div class="metric-tile">
-                <div class="mb-1 text-xs text-slate-400">{t('provider.website', lang)}</div>
+                <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-400"><Icon name="globe" />{t('provider.website', lang)}</div>
                 <a href={provider.website} target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-brand-600 hover:underline">{t('common.visit', lang)} ↗</a>
               </div>
             )}
             {provider.founded_date && (
               <div class="metric-tile">
-                <div class="mb-1 text-xs text-slate-400">{t('provider.founded', lang)}</div>
+                <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-400"><Icon name="calendar" />{t('provider.founded', lang)}</div>
                 <div class="text-sm font-semibold text-slate-900">{provider.founded_date}</div>
               </div>
             )}
             {provider.apply_method && (
               <div class="metric-tile">
-                <div class="mb-1 text-xs text-slate-400">{t('provider.apply_method', lang)}</div>
+                <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-400"><Icon name="id-card" />{t('provider.apply_method', lang)}</div>
                 <div class="text-sm font-semibold text-slate-900">{provider.apply_method}</div>
               </div>
             )}
             <div class="metric-tile">
-              <div class="mb-1 text-xs text-slate-400">{t('provider.kyc', lang)}</div>
+              <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-400"><Icon name="shield" />{t('provider.kyc', lang)}</div>
               <div class="text-sm font-semibold text-slate-900">
                 {provider.need_kyc ? (
                   <span class="text-amber-600">{t('provider.kyc_yes', lang)}</span>
@@ -378,7 +376,7 @@ export async function providerPage(c: Context<Env>) {
             </div>
             {provider.region && (
               <div class="metric-tile">
-                <div class="mb-1 text-xs text-slate-400">{t('provider.region', lang)}</div>
+                <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-400"><Icon name="map-pin" />{t('provider.region', lang)}</div>
                 <div class="text-sm font-semibold text-slate-900">{provider.region}</div>
               </div>
             )}
@@ -388,7 +386,7 @@ export async function providerPage(c: Context<Env>) {
         {/* Card BINs */}
         <div class="mb-6 flex items-end justify-between"><div><p class="eyebrow mb-2">AVAILABLE PRODUCTS</p><h2 class="section-title">{t('provider.cards', lang)}</h2></div><span class="rounded-full bg-brand-50 px-3 py-1.5 text-sm font-bold text-brand-700">{cards.results.length}</span></div>
         {cards.results.length === 0 ? (
-          <div class="empty-state">{t('home.no_results', lang)}</div>
+          <EmptyState>{t('home.no_results', lang)}</EmptyState>
         ) : (
           <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
             {cards.results.map((card) => (
@@ -450,7 +448,7 @@ export async function cardPage(c: Context<Env>) {
 
   if (!card) {
     return c.html(
-      <Layout title={t('card.not_found', lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, `/card/${slug}`))} noIndex>
+      <Layout title={t('card.not_found', lang)} lang={lang} active="cards" canonicalUrl={absoluteUrl(c, langPath(lang, `/card/${slug}`))} noIndex>
         <div class="max-w-7xl mx-auto px-4 py-16 text-center">
           <h1 class="mb-4 text-2xl font-bold text-slate-900">{t('card.not_found', lang)}</h1>
           <a href={langPath(lang, '/')} class="text-brand-600 hover:underline">{t('provider.back', lang)}</a>
@@ -485,7 +483,7 @@ export async function cardPage(c: Context<Env>) {
   ];
 
   return c.html(
-    <Layout title={`${card.card_type} ${card.bin}`} description={cardMetaDescription(card, lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, `/card/${card.slug}`))} alternates={{ zh: absoluteUrl(c, `/card/${card.slug}`), en: absoluteUrl(c, `/en/card/${card.slug}`) }} jsonLd={jsonLd}>
+    <Layout title={`${card.card_type} ${card.bin}`} description={cardMetaDescription(card, lang)} lang={lang} active="cards" canonicalUrl={absoluteUrl(c, langPath(lang, `/card/${card.slug}`))} alternates={{ zh: absoluteUrl(c, `/card/${card.slug}`), en: absoluteUrl(c, `/en/card/${card.slug}`) }} jsonLd={jsonLd}>
       <div class="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
         <nav class="breadcrumb mb-7">
           <a href={langPath(lang, '/')} class="hover:text-brand-600">{t('nav.home', lang)}</a>
@@ -495,8 +493,7 @@ export async function cardPage(c: Context<Env>) {
           <span class="text-slate-900">{card.bin}</span>
         </nav>
 
-        <div class="surface-card relative overflow-hidden p-6 sm:p-9">
-          <div class="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-brand-500 to-accent-400"></div>
+        <div class="surface-card p-6 sm:p-9">
           <div class="mb-8 flex items-center space-x-3">
             <span class={`px-3 py-1 rounded-lg text-sm font-bold ${card.card_type === 'Visa' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
               {card.card_type}
@@ -506,24 +503,24 @@ export async function cardPage(c: Context<Env>) {
 
           <div class="mb-8 grid grid-cols-2 gap-3 md:grid-cols-4">
             <div class="metric-tile">
-              <div class="mb-1 text-xs text-slate-400">{t('card.issuance_fee', lang)}</div>
-              <div class="text-xl font-bold text-slate-900">
+              <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-400"><Icon name="credit-card" />{t('card.issuance_fee', lang)}</div>
+              <div class="text-xl font-bold tabular-nums text-slate-900">
                 {card.issuance_fee === 0 ? <span class="text-green-600">{t('common.free', lang)}</span> : `$${card.issuance_fee}`}
               </div>
             </div>
             <div class="metric-tile">
-              <div class="mb-1 text-xs text-slate-400">{t('card.fee_rate', lang)}</div>
-              <div class="text-xl font-bold text-slate-900">{card.fee_rate}%</div>
+              <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-400"><Icon name="percent" />{t('card.fee_rate', lang)}</div>
+              <div class="text-xl font-bold tabular-nums text-slate-900">{card.fee_rate}%</div>
             </div>
             <div class="metric-tile">
-              <div class="mb-1 text-xs text-slate-400">{t('card.monthly_fee', lang)}</div>
-              <div class="text-xl font-bold text-slate-900">
+              <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-400"><Icon name="calendar" />{t('card.monthly_fee', lang)}</div>
+              <div class="text-xl font-bold tabular-nums text-slate-900">
                 {card.monthly_fee === 0 ? <span class="text-green-600">{t('common.free', lang)}</span> : `$${card.monthly_fee}`}
               </div>
             </div>
             <div class="metric-tile">
-              <div class="mb-1 text-xs text-slate-400">{t('card.initial_load', lang)}</div>
-              <div class="text-xl font-bold text-slate-900">${card.initial_load}</div>
+              <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-400"><Icon name="banknote" />{t('card.initial_load', lang)}</div>
+              <div class="text-xl font-bold tabular-nums text-slate-900">${card.initial_load}</div>
             </div>
           </div>
 
@@ -552,7 +549,7 @@ export async function cardPage(c: Context<Env>) {
           {card.description && (
             <div class="mt-6 border-t border-slate-100 pt-6">
               <div class="mb-2 text-xs text-slate-400">{t('provider.description', lang)}</div>
-              <p class="leading-7 text-slate-600">{card.description}</p>
+              <div class="content-prose text-[.95rem] leading-7 text-slate-600" dangerouslySetInnerHTML={{ __html: contentBodyHtml(card.description) }} />
             </div>
           )}
         </div>
@@ -580,7 +577,7 @@ export async function contentListPage(c: Context<Env>) {
   const total = countRow?.c || 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   if (page > totalPages) {
-    return c.html(<Layout title={t('content.title', lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, '/content'))} noIndex><div class="page-shell py-20"><div class="empty-state">{t('content.no_results', lang)}</div></div></Layout>, 404);
+    return c.html(<Layout title={t('content.title', lang)} lang={lang} active="content" canonicalUrl={absoluteUrl(c, langPath(lang, '/content'))} noIndex><div class="page-shell py-20"><EmptyState>{t('content.no_results', lang)}</EmptyState></div></Layout>, 404);
   }
   const canonicalPath = langPath(lang, pageUrl('/content', page));
   const title = page > 1 ? `${t('content.title', lang)} - ${lang === 'zh' ? `第 ${page} 页` : `Page ${page}`}` : t('content.title', lang);
@@ -600,6 +597,7 @@ export async function contentListPage(c: Context<Env>) {
       title={title}
       description={t('content.desc', lang)}
       lang={lang}
+      active="content"
       canonicalUrl={absoluteUrl(c, canonicalPath)}
       alternates={{ zh: absoluteUrl(c, pageUrl('/content', page)), en: absoluteUrl(c, pageUrl('/en/content', page)) }}
       prevUrl={page > 1 ? absoluteUrl(c, pageUrl(langPath(lang, '/content'), page - 1)) : undefined}
@@ -615,7 +613,7 @@ export async function contentListPage(c: Context<Env>) {
         </div>
       </section>
       <section class="page-shell py-12 sm:py-14">
-        {posts.results.length ? <div class="grid grid-cols-1 gap-7 md:grid-cols-2 lg:grid-cols-3">{posts.results.map((post) => <ArticleTile post={post} lang={lang} prominent />)}</div> : <div class="empty-state">{t('content.no_results', lang)}</div>}
+        {posts.results.length ? <div class="grid grid-cols-1 gap-7 md:grid-cols-2 lg:grid-cols-3">{posts.results.map((post) => <ArticleTile post={post} lang={lang} prominent />)}</div> : <EmptyState>{t('content.no_results', lang)}</EmptyState>}
         <Pagination path={langPath(lang, '/content')} page={page} totalPages={totalPages} lang={lang} />
       </section>
     </Layout>
@@ -629,7 +627,7 @@ export async function contentDetailPage(c: Context<Env>) {
 
   if (!post) {
     return c.html(
-      <Layout title={t('content.not_found', lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, `/content/${slug}`))} noIndex>
+      <Layout title={t('content.not_found', lang)} lang={lang} active="content" canonicalUrl={absoluteUrl(c, langPath(lang, `/content/${slug}`))} noIndex>
         <div class="max-w-7xl mx-auto px-4 py-16 text-center">
           <h1 class="mb-4 text-2xl font-bold text-slate-900">{t('content.not_found', lang)}</h1>
           <a href={langPath(lang, '/content')} class="text-brand-600 hover:underline">{t('content.back', lang)}</a>
@@ -662,7 +660,7 @@ export async function contentDetailPage(c: Context<Env>) {
   ];
 
   return c.html(
-    <Layout title={contentTitle(post, lang)} description={contentExcerpt(post, lang)} lang={lang} canonicalUrl={absoluteUrl(c, langPath(lang, `/content/${post.slug}`))} alternates={{ zh: absoluteUrl(c, `/content/${post.slug}`), en: absoluteUrl(c, `/en/content/${post.slug}`) }} ogType="article" ogImage={post.featured_image_url ? absoluteUrl(c, `/images/${post.featured_image_url}`) : undefined} jsonLd={jsonLd}>
+    <Layout title={contentTitle(post, lang)} description={contentExcerpt(post, lang)} lang={lang} active="content" canonicalUrl={absoluteUrl(c, langPath(lang, `/content/${post.slug}`))} alternates={{ zh: absoluteUrl(c, `/content/${post.slug}`), en: absoluteUrl(c, `/en/content/${post.slug}`) }} ogType="article" ogImage={post.featured_image_url ? absoluteUrl(c, `/images/${post.featured_image_url}`) : undefined} jsonLd={jsonLd}>
       <article class="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-14">
         <nav class="breadcrumb mb-8">
           <a href={langPath(lang, '/')} class="hover:text-brand-600">{t('nav.home', lang)}</a>

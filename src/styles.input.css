@@ -12,6 +12,14 @@
   }
   :focus-visible { @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white; }
   a, button, input { @apply transition-colors; }
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-slate-300/80;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-slate-400; }
 }
 
 @layer components {
@@ -24,6 +32,22 @@
   .breadcrumb a { @apply hover:text-brand-600; }
   .button-secondary { @apply inline-flex items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 py-3 font-bold text-slate-700 shadow-sm hover:-translate-y-0.5 hover:border-brand-200 hover:text-brand-700; transition: transform .2s ease, border-color .2s ease, color .2s ease; }
   .metric-tile { @apply rounded-2xl border border-slate-100 bg-slate-50/80 p-4; }
-  .empty-state { @apply rounded-3xl border border-dashed border-slate-300 bg-white/70 px-6 py-20 text-center text-slate-400; }
+  .empty-state { @apply rounded-3xl border border-dashed border-slate-300 bg-white/70 px-6 py-16 text-center text-slate-400; }
   .status-featured { @apply rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700 ring-1 ring-amber-200/70; }
+}
+
+.hero-float { animation: hero-float 7s ease-in-out infinite; }
+
+@keyframes hero-float {
+  0%, 100% { transform: rotate(2deg) translateY(0); }
+  50% { transform: rotate(2deg) translateY(-10px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .hero-float { animation: none; }
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

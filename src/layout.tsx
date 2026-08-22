@@ -7,6 +7,7 @@ interface LayoutProps {
   title: string;
   description?: string;
   lang: Lang;
+  active?: 'home' | 'providers' | 'cards' | 'content';
   canonicalUrl?: string;
   alternates?: { zh: string; en: string };
   noIndex?: boolean;
@@ -19,7 +20,7 @@ interface LayoutProps {
   children: Child;
 }
 
-export function Layout({ title, description, lang, canonicalUrl, alternates, noIndex, followWhenNoIndex, ogType, ogImage, prevUrl, nextUrl, jsonLd, children }: LayoutProps) {
+export function Layout({ title, description, lang, active, canonicalUrl, alternates, noIndex, followWhenNoIndex, ogType, ogImage, prevUrl, nextUrl, jsonLd, children }: LayoutProps) {
   const desc = description || t('site.description', lang);
   const switchLang = lang === 'zh' ? 'en' : 'zh';
   const switchUrl = `/lang/${switchLang}`;
@@ -28,6 +29,8 @@ export function Layout({ title, description, lang, canonicalUrl, alternates, noI
   const serializedJsonLd = jsonLd
     ? JSON.stringify(jsonLd).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')
     : '';
+  const navLink = (key: 'home' | 'providers' | 'cards' | 'content', extra = '') =>
+    `rounded-xl px-2.5 py-2 text-xs font-semibold sm:px-3 sm:text-sm transition-colors ${active === key ? 'bg-white text-brand-600 shadow-sm' : 'text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm'} ${extra}`;
 
   return (
     <html lang={lang === 'zh' ? 'zh-CN' : 'en'}>
@@ -88,10 +91,10 @@ export function Layout({ title, description, lang, canonicalUrl, alternates, noI
               </a>
               <div class="flex items-center gap-1.5">
                 <div class="flex items-center rounded-2xl border border-slate-200/70 bg-slate-50/80 p-1">
-                  <a href={langPath(lang, '/')} class="hidden rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:block">{t('nav.home', lang)}</a>
-                  <a href={langPath(lang, '/providers')} class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.providers', lang)}</a>
-                  <a href={langPath(lang, '/cards')} class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.cards', lang)}</a>
-                  <a href={langPath(lang, '/content')} class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.content', lang)}</a>
+                  <a href={langPath(lang, '/')} class={navLink('home', 'hidden px-3 text-sm sm:block')}>{t('nav.home', lang)}</a>
+                  <a href={langPath(lang, '/providers')} class={navLink('providers')}>{t('nav.providers', lang)}</a>
+                  <a href={langPath(lang, '/cards')} class={navLink('cards')}>{t('nav.cards', lang)}</a>
+                  <a href={langPath(lang, '/content')} class={navLink('content')}>{t('nav.content', lang)}</a>
                 </div>
                 <a
                   href={switchUrl}

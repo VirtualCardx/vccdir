@@ -133,6 +133,20 @@ describe('public routing', () => {
     expect(await en.text()).toContain('Virtual Card Platform Directory');
   });
 
+  it('formats multi-line provider descriptions into paragraphs', async () => {
+    const env = {
+      ...baseEnv,
+      DB: mockDatabase({
+        first: { id: 1, slug: 'aven-card', name_zh: '测试平台', name_en: 'Test Platform', status: 'active', desc_zh: '第一段\n\n第二段', desc_en: 'Para one\n\nPara two' },
+      }),
+    } as CloudflareBindings;
+    const response = await app.request('https://www.vccdir.com/provider/aven-card', {}, env);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('<p>第一段</p>');
+    expect(body).toContain('<p>第二段</p>');
+  });
+
   it('marks card search results noindex while normal listings stay indexable', async () => {
     const env = { ...baseEnv, DB: mockDatabase() } as CloudflareBindings;
     const listing = await app.request('https://www.vccdir.com/cards', {}, env);

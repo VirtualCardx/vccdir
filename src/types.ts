@@ -32,6 +32,7 @@ export interface Card {
   usage: string | null;
   description: string | null;
   status: string;
+  is_featured: number;
   slug: string;
   created_at: string;
 }
@@ -40,6 +41,7 @@ export interface CardWithProvider extends Card {
   provider_name_zh: string;
   provider_name_en: string;
   provider_slug: string;
+  provider_logo_url: string | null;
 }
 
 export interface Tag {
@@ -64,14 +66,9 @@ export interface ContentPost {
   body_zh: string;
   body_en: string;
   status: string;
+  is_featured: number;
+  featured_image_url: string | null;
   published_at: string | null;
   created_at: string;
   updated_at: string;
-}
-
-export interface AdminUser {
-  id: number;
-  username: string;
-  password_hash: string;
-  created_at: string;
 }

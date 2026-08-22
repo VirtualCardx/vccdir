@@ -33,5 +33,12 @@
 			"binding": "R2",
 			"bucket_name": "vcc-logos"
 		}
+	],
+	"rules": [
+		{
+			"type": "Text",
+			"globs": ["**/*.css"],
+			"fallthrough": true
+		}
 	]
 }

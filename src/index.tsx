@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { getCookie, setCookie } from 'hono/cookie';
+import { bodyLimit } from 'hono/body-limit';
 import type { Context } from 'hono';
 import { Layout } from './layout';
 import { t, getLang } from './i18n';
@@ -12,6 +13,11 @@ const app = new Hono<Env>();
 // route both hostnames to this Worker, so normalize the bare domain here as a
 // safety net even when an edge redirect rule has not been configured yet.
 app.use('*', async (c, next) => {
+  c.header('Content-Security-Policy', "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
   const configured = c.env.SITE_URL?.replace(/\/+$/, '');
   if (configured) {
     const canonical = new URL(configured);
@@ -31,140 +37,11 @@ app.use('*', async (c, next) => {
 // ==========================================
 // Helpers
 // ==========================================
-async function sha256(text: string): Promise<string> {
-  const data = new TextEncoder().encode(text);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return bytes;
-}
-
-function base64Url(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-function randomToken(bytes = 32): string {
-  const values = new Uint8Array(bytes);
-  crypto.getRandomValues(values);
-  return base64Url(values);
-}
-
-function sessionSecret(c: Context<Env>): string {
-  return c.env.SESSION_SECRET || c.env.ADMIN_PASSWORD;
-}
-
-function isSecureRequest(c: Context<Env>): boolean {
-  return new URL(c.req.url).protocol === 'https:';
-}
-
-async function hmac(text: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text));
-  return base64Url(new Uint8Array(signature));
-}
-
-async function pbkdf2(password: string, salt: Uint8Array, iterations: number): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(password),
-    'PBKDF2',
-    false,
-    ['deriveBits']
-  );
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
-    key,
-    256
-  );
-  return bytesToHex(new Uint8Array(bits));
-}
-
-async function hashPassword(password: string): Promise<string> {
-  const salt = new Uint8Array(16);
-  crypto.getRandomValues(salt);
-  const iterations = 210000;
-  return `pbkdf2$${iterations}$${bytesToHex(salt)}$${await pbkdf2(password, salt, iterations)}`;
-}
-
-async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
-  if (storedHash.startsWith('pbkdf2$')) {
-    const [, iterationsText, saltHex, hash] = storedHash.split('$');
-    const iterations = Number(iterationsText);
-    if (!Number.isFinite(iterations) || !saltHex || !hash) return false;
-    const candidate = await pbkdf2(password, hexToBytes(saltHex), iterations);
-    return constantTimeEqual(candidate, hash);
-  }
-
-  return constantTimeEqual(await sha256(password), storedHash);
-}
-
 function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let result = 0;
   for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return result === 0;
-}
-
-async function createSessionCookie(c: Context<Env>, userId: number): Promise<string> {
-  const expires = Math.floor(Date.now() / 1000) + 60 * 60 * 24;
-  const payload = `${userId}.${expires}.${randomToken(16)}`;
-  return `${payload}.${await hmac(payload, sessionSecret(c))}`;
-}
-
-async function isLoggedIn(c: Context<Env>): Promise<boolean> {
-  const session = getCookie(c, 'admin_session');
-  if (!session) return false;
-
-  const parts = session.split('.');
-  if (parts.length !== 4) return false;
-
-  const payload = parts.slice(0, 3).join('.');
-  const signature = parts[3];
-  const expected = await hmac(payload, sessionSecret(c));
-  if (!constantTimeEqual(signature, expected)) return false;
-
-  const expires = Number(parts[1]);
-  return Number.isFinite(expires) && expires > Math.floor(Date.now() / 1000);
-}
-
-function getCsrfToken(c: Context<Env>): string {
-  const existing = getCookie(c, 'csrf_token');
-  if (existing && existing.length >= 32) return existing;
-
-  const token = randomToken();
-  setCookie(c, 'csrf_token', token, {
-    path: '/admin',
-    httpOnly: false,
-    secure: isSecureRequest(c),
-    sameSite: 'Lax',
-    maxAge: 60 * 60 * 24,
-  });
-  return token;
-}
-
-async function verifyCsrf(c: Context<Env>): Promise<boolean> {
-  const cookieToken = getCookie(c, 'csrf_token');
-  if (!cookieToken) return false;
-
-  const body = await c.req.parseBody();
-  const formToken = body['csrf_token'];
-  return typeof formToken === 'string' && constantTimeEqual(formToken, cookieToken);
 }
 
 function providerName(p: Provider | { name_zh: string; name_en: string }, lang: Lang): string {
@@ -225,7 +102,7 @@ function plainTextToHtml(text: string): string {
     .join('');
 }
 
-function sanitizeContentHtml(html: string): string {
+export function sanitizeContentHtml(html: string): string {
   const allowedTags = new Set(['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'h2', 'h3', 'ul', 'ol', 'li', 'blockquote', 'a', 'hr']);
   const safeHref = (href: string) => /^(https?:\/\/|mailto:|\/|#)/i.test(href) && !/^javascript:/i.test(href);
   const withoutUnsafeBlocks = html
@@ -256,8 +133,55 @@ function tagName(tag: Tag, lang: Lang): string {
   return lang === 'zh' ? tag.name_zh : tag.name_en;
 }
 
-function generateSlug(text: string): string {
+export function generateSlug(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+class ApiError extends Error {
+  constructor(public status: 400 | 404 | 409 | 413 | 415, message: string) {
+    super(message);
+  }
+}
+
+function parseLimit(value: string | undefined, fallback: number, maximum: number): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, maximum);
+}
+
+function assertSlug(slug: string): string {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 120) {
+    throw new ApiError(400, 'slug must be lowercase ASCII words separated by hyphens');
+  }
+  return slug;
+}
+
+function assertSafeWebsite(value: string | null): string | null {
+  if (!value) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ApiError(400, 'website must be a valid HTTPS URL');
+  }
+  if (url.protocol !== 'https:') throw new ApiError(400, 'website must use HTTPS');
+  return url.toString();
+}
+
+async function parseJsonBody(c: Context<Env>): Promise<Record<string, unknown>> {
+  const contentType = c.req.header('Content-Type') || '';
+  if (!contentType.toLowerCase().startsWith('application/json')) throw new ApiError(415, 'Content-Type must be application/json');
+  const contentLength = Number(c.req.header('Content-Length') || 0);
+  if (contentLength > 256 * 1024) throw new ApiError(413, 'JSON body exceeds 256 KiB');
+  try {
+    const body = await c.req.json<unknown>();
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error();
+    if (new TextEncoder().encode(JSON.stringify(body)).byteLength > 256 * 1024) throw new ApiError(413, 'JSON body exceeds 256 KiB');
+    return body as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(400, 'Request body must be a JSON object');
+  }
 }
 
 function requireHermesAuth(c: Context<Env>): Response | null {
@@ -281,55 +205,156 @@ function stringField(body: Record<string, unknown>, key: string, fallback = ''):
   return typeof value === 'string' ? value.trim() : fallback;
 }
 
+function requiredStringField(body: Record<string, unknown>, key: string, maximum: number): string {
+  const value = stringField(body, key);
+  if (!value) throw new ApiError(400, `${key} is required`);
+  if (value.length > maximum) throw new ApiError(400, `${key} exceeds ${maximum} characters`);
+  return value;
+}
+
 function nullableStringField(body: Record<string, unknown>, key: string): string | null {
   const value = stringField(body, key);
   return value || null;
 }
 
+function patchedNullableString(body: Record<string, unknown>, key: string, current: string | null): string | null {
+  if (!(key in body)) return current;
+  if (body[key] === null) return null;
+  if (typeof body[key] !== 'string') throw new ApiError(400, `${key} must be a string or null`);
+  return String(body[key]).trim() || null;
+}
+
 function normalizeContentStatus(value: string): string {
+  if (value && value !== 'draft' && value !== 'published') throw new ApiError(400, 'status must be draft or published');
   return value === 'published' ? 'published' : 'draft';
 }
 
 function normalizeActiveStatus(value: string): string {
+  if (value && value !== 'active' && value !== 'inactive') throw new ApiError(400, 'status must be active or inactive');
   return value === 'inactive' ? 'inactive' : 'active';
+}
+
+function assertLogoKey(value: string | null): string | null {
+  if (!value) return null;
+  if (!/^logos\/[a-z0-9-]+\.(?:png|jpg|jpeg|webp|gif)$/i.test(value)) throw new ApiError(400, 'logo_url must be a managed image key');
+  return value;
+}
+
+function assertContentImageKey(value: string | null): string | null {
+  if (!value) return null;
+  if (!/^content\/[a-z0-9-]+\.(?:png|jpg|jpeg|webp|gif)$/i.test(value)) {
+    throw new ApiError(400, 'featured_image_url must be a managed content image key');
+  }
+  return value;
+}
+
+function optionalIsoDate(value: string | null, key: string): string | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) throw new ApiError(400, `${key} must be a valid ISO date`);
+  return new Date(timestamp).toISOString();
 }
 
 function numberField(body: Record<string, unknown>, key: string, fallback = 0): number {
   const value = body[key];
+  if (value === undefined || value === null || value === '') return fallback;
   const numberValue = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(numberValue) ? numberValue : fallback;
+  if (!Number.isFinite(numberValue)) throw new ApiError(400, `${key} must be a finite number`);
+  return numberValue;
+}
+
+function nonNegativeNumberField(body: Record<string, unknown>, key: string, fallback = 0): number {
+  const value = numberField(body, key, fallback);
+  if (value < 0) throw new ApiError(400, `${key} must be zero or greater`);
+  return value;
 }
 
 function optionalNumberField(body: Record<string, unknown>, key: string): number | null {
   const value = body[key];
   if (value === undefined || value === null || value === '') return null;
   const numberValue = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(numberValue) ? numberValue : null;
+  if (!Number.isFinite(numberValue)) throw new ApiError(400, `${key} must be a finite number`);
+  return numberValue;
+}
+
+function binaryFlagField(body: Record<string, unknown>, key: string, fallback: number): number {
+  const value = numberField(body, key, fallback);
+  if (value !== 0 && value !== 1) throw new ApiError(400, `${key} must be 0 or 1`);
+  return value;
+}
+
+function detectImageType(bytes: Uint8Array): { mime: string; extension: string } | null {
+  if (bytes.length >= 8 && bytes.slice(0, 8).every((byte, index) => byte === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][index])) {
+    return { mime: 'image/png', extension: 'png' };
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { mime: 'image/jpeg', extension: 'jpg' };
+  const ascii = (start: number, length: number) => String.fromCharCode(...bytes.slice(start, start + length));
+  if (bytes.length >= 6 && (ascii(0, 6) === 'GIF87a' || ascii(0, 6) === 'GIF89a')) return { mime: 'image/gif', extension: 'gif' };
+  if (bytes.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') return { mime: 'image/webp', extension: 'webp' };
+  return null;
 }
 
 function numberArrayField(body: Record<string, unknown>, key: string): number[] | null {
   const value = body[key];
   if (!Array.isArray(value)) return null;
-  return value.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0);
+  const numbers = [...new Set(value.map((item) => Number(item)))];
+  if (numbers.some((item) => !Number.isInteger(item) || item < 1)) throw new ApiError(400, `${key} must contain positive integer IDs`);
+  return numbers;
 }
 
-async function apiProviderWithTags(db: D1Database, provider: Provider): Promise<ProviderWithTags> {
-  const [tags, cardCount] = await Promise.all([
+async function apiProvidersWithTags(db: D1Database, providers: Provider[], activeCardsOnly = false): Promise<ProviderWithTags[]> {
+  if (!providers.length) return [];
+  const placeholders = providers.map(() => '?').join(',');
+  const ids = providers.map((provider) => provider.id);
+  const [tagRows, countRows] = await Promise.all([
     db.prepare(
-      'SELECT t.* FROM vcc_tags t INNER JOIN vcc_provider_tags pt ON t.id = pt.tag_id WHERE pt.provider_id = ? ORDER BY t.category, t.id'
-    ).bind(provider.id).all<Tag>(),
-    db.prepare('SELECT COUNT(*) as c FROM vcc_cards WHERE provider_id = ?').bind(provider.id).first<{ c: number }>(),
+      `SELECT pt.provider_id, t.* FROM vcc_provider_tags pt INNER JOIN vcc_tags t ON t.id = pt.tag_id WHERE pt.provider_id IN (${placeholders}) ORDER BY t.category, t.id`
+    ).bind(...ids).all<Tag & { provider_id: number }>(),
+    db.prepare(
+      `SELECT provider_id, COUNT(*) AS card_count FROM vcc_cards WHERE provider_id IN (${placeholders})${activeCardsOnly ? ' AND status = ?' : ''} GROUP BY provider_id`
+    ).bind(...ids, ...(activeCardsOnly ? ['active'] : [])).all<{ provider_id: number; card_count: number }>(),
   ]);
-  return { ...provider, tags: tags.results, card_count: cardCount?.c || 0 };
+  const tagsByProvider = new Map<number, Tag[]>();
+  for (const row of tagRows.results) {
+    const tags = tagsByProvider.get(row.provider_id) || [];
+    const { provider_id: _providerId, ...tag } = row;
+    tags.push(tag);
+    tagsByProvider.set(row.provider_id, tags);
+  }
+  const counts = new Map(countRows.results.map((row) => [row.provider_id, row.card_count]));
+  return providers.map((provider) => ({
+    ...provider,
+    tags: tagsByProvider.get(provider.id) || [],
+    card_count: counts.get(provider.id) || 0,
+  }));
+}
+
+async function validateTagIds(db: D1Database, tagIds: number[] | null): Promise<void> {
+  if (!tagIds?.length) return;
+  if (tagIds.length) {
+    const placeholders = tagIds.map(() => '?').join(',');
+    const existing = await db.prepare(`SELECT id FROM vcc_tags WHERE id IN (${placeholders})`).bind(...tagIds).all<{ id: number }>();
+    if (existing.results.length !== tagIds.length) throw new ApiError(400, 'tag_ids contains an unknown tag');
+  }
 }
 
 async function updateProviderTags(db: D1Database, providerId: number, tagIds: number[] | null): Promise<void> {
   if (!tagIds) return;
-  await db.prepare('DELETE FROM vcc_provider_tags WHERE provider_id = ?').bind(providerId).run();
-  for (const tagId of tagIds) {
-    await db.prepare('INSERT OR IGNORE INTO vcc_provider_tags (provider_id, tag_id) VALUES (?, ?)').bind(providerId, tagId).run();
-  }
+  await validateTagIds(db, tagIds);
+  await db.batch([
+    db.prepare('DELETE FROM vcc_provider_tags WHERE provider_id = ?').bind(providerId),
+    ...tagIds.map((tagId) => db.prepare('INSERT INTO vcc_provider_tags (provider_id, tag_id) VALUES (?, ?)').bind(providerId, tagId)),
+  ]);
 }
+
+app.onError((error, c) => {
+  if (error instanceof ApiError) return c.json({ error: error.message }, error.status);
+  const message = error instanceof Error ? error.message : String(error);
+  if (/UNIQUE constraint failed/i.test(message)) return c.json({ error: 'A record with the same unique value already exists' }, 409);
+  if (/FOREIGN KEY constraint failed/i.test(message)) return c.json({ error: 'A referenced record does not exist' }, 400);
+  console.error(error);
+  return c.json({ error: 'Internal server error' }, 500);
+});
 
 function siteOrigin(c: Context<Env>): string {
   const configured = c.env.SITE_URL?.replace(/\/+$/, '');
@@ -380,15 +405,132 @@ function breadcrumbJsonLd(c: Context<Env>, items: { name: string; path: string }
   };
 }
 
+export function publicPageNumber(value: string | undefined): number | null {
+  if (!value) return 1;
+  const page = Number(value);
+  return Number.isInteger(page) && page > 0 ? page : null;
+}
+
+export function pageUrl(path: string, page: number, query: Record<string, string> = {}): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value) params.set(key, value);
+  if (page > 1) params.set('page', String(page));
+  const suffix = params.toString();
+  return suffix ? `${path}?${suffix}` : path;
+}
+
+function Pagination({ path, page, totalPages, query, lang }: {
+  path: string;
+  page: number;
+  totalPages: number;
+  query?: Record<string, string>;
+  lang: Lang;
+}) {
+  if (totalPages <= 1) return null;
+  const first = Math.max(1, page - 2);
+  const last = Math.min(totalPages, page + 2);
+  const pages = Array.from({ length: last - first + 1 }, (_, index) => first + index);
+  return (
+    <nav class="mt-12 flex flex-wrap items-center justify-center gap-2" aria-label={lang === 'zh' ? '分页导航' : 'Pagination'}>
+      {page > 1 && (
+        <a rel="prev" href={pageUrl(path, page - 1, query)} class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-brand-200 hover:text-brand-600">
+          &larr; {t('common.previous', lang)}
+        </a>
+      )}
+      {first > 1 && <span class="px-2 text-slate-400">…</span>}
+      {pages.map((number) => (
+        <a
+          href={pageUrl(path, number, query)}
+          aria-current={number === page ? 'page' : undefined}
+          class={`flex h-10 min-w-10 items-center justify-center rounded-xl px-3 text-sm font-semibold transition-colors ${number === page ? 'bg-brand-600 text-white shadow-lg shadow-brand-600/20' : 'border border-slate-200 bg-white text-slate-600 hover:border-brand-200 hover:text-brand-600'}`}
+        >
+          {number}
+        </a>
+      ))}
+      {last < totalPages && <span class="px-2 text-slate-400">…</span>}
+      {page < totalPages && (
+        <a rel="next" href={pageUrl(path, page + 1, query)} class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition-colors hover:border-brand-200 hover:text-brand-600">
+          {t('common.next', lang)} &rarr;
+        </a>
+      )}
+    </nav>
+  );
+}
+
+function CardTile({ card, lang }: { card: CardWithProvider; lang: Lang }) {
+  const name = lang === 'zh' ? card.provider_name_zh : card.provider_name_en;
+  return (
+    <a href={`/card/${card.slug}`} class="card-hover group relative block overflow-hidden rounded-3xl border border-slate-200/70 bg-white p-6 shadow-soft">
+      <span class="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand-500 via-brand-400 to-accent-400 opacity-0 transition-opacity group-hover:opacity-100"></span>
+      <div class="mb-5 flex items-center justify-between gap-3">
+        <div class="flex min-w-0 items-center gap-3">
+          {card.provider_logo_url ? (
+            <img src={`/images/${card.provider_logo_url}`} alt="" width="44" height="44" loading="lazy" class="h-11 w-11 rounded-xl object-cover" />
+          ) : (
+            <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-100 to-accent-50 font-bold text-brand-700 ring-1 ring-brand-100">{name.charAt(0)}</div>
+          )}
+          <div class="min-w-0">
+            <div class="truncate text-sm font-medium text-slate-500">{name}</div>
+            <h3 class="font-mono text-lg font-bold tracking-tight text-slate-950">{card.bin}</h3>
+          </div>
+        </div>
+        <div class="flex shrink-0 flex-col items-end gap-1.5">
+          {card.is_featured === 1 && <span class="status-featured">{t('home.pinned', lang)}</span>}
+          <span class={`rounded-lg px-2.5 py-1 text-xs font-bold ${card.card_type === 'Visa' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>{card.card_type}</span>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-2 rounded-2xl bg-slate-50/90 p-3 text-center ring-1 ring-slate-100">
+        <div><div class="text-[11px] text-slate-400">{t('card.issuance_fee', lang)}</div><div class="mt-1 font-bold text-slate-900">{card.issuance_fee === 0 ? t('common.free', lang) : `$${card.issuance_fee}`}</div></div>
+        <div class="border-x border-slate-200"><div class="text-[11px] text-slate-400">{t('card.fee_rate', lang)}</div><div class="mt-1 font-bold text-slate-900">{card.fee_rate}%</div></div>
+        <div><div class="text-[11px] text-slate-400">{t('card.currency', lang)}</div><div class="mt-1 font-bold text-slate-900">{card.currency}</div></div>
+      </div>
+      <div class="mt-4 flex items-center justify-between gap-3 text-sm">
+        <span class="truncate text-slate-500">{card.usage || t('common.na', lang)}</span>
+        <span class="shrink-0 font-medium text-brand-600 group-hover:translate-x-0.5">{t('provider.view_detail', lang)} &rarr;</span>
+      </div>
+    </a>
+  );
+}
+
+function ArticleTile({ post, lang, prominent = false }: { post: ContentPost; lang: Lang; prominent?: boolean }) {
+  return (
+    <article class="card-hover group overflow-hidden rounded-3xl border border-slate-200/70 bg-white shadow-soft">
+      <a href={`/content/${post.slug}`} class="block">
+        {post.featured_image_url ? (
+          <img src={`/images/${post.featured_image_url}`} alt={contentTitle(post, lang)} width="720" height="405" loading="lazy" class={`w-full object-cover ${prominent ? 'aspect-[16/9]' : 'aspect-[16/8]'}`} />
+        ) : (
+          <div class={`relative flex w-full items-end overflow-hidden bg-gradient-to-br from-brand-600 via-brand-500 to-accent-500 p-5 ${prominent ? 'aspect-[16/9]' : 'aspect-[16/8]'}`}><span class="absolute -right-8 -top-8 h-32 w-32 rounded-full border-[24px] border-white/10"></span><span class="relative text-xs font-bold uppercase tracking-[.18em] text-white/90">VCC INSIGHTS</span></div>
+        )}
+        <div class="p-5">
+          <div class="flex items-center justify-between gap-3">
+            {post.published_at && <time datetime={post.published_at} class="text-xs font-medium text-slate-400">{post.published_at.slice(0, 10)}</time>}
+            {post.is_featured === 1 && <span class="status-featured">{t('home.pinned', lang)}</span>}
+          </div>
+          <h3 class={`${prominent ? 'mt-2 text-xl' : 'mt-2 text-lg'} font-bold leading-snug tracking-tight text-slate-950 transition-colors group-hover:text-brand-600`}>{contentTitle(post, lang)}</h3>
+          <p class="mt-3 line-clamp-2 text-sm leading-6 text-slate-500">{contentExcerpt(post, lang)}</p>
+          <span class="mt-4 inline-block text-sm font-medium text-brand-600">{t('content.read_more', lang)} &rarr;</span>
+        </div>
+      </a>
+    </article>
+  );
+}
+
 // ==========================================
 // Language Switch
 // ==========================================
 app.get('/lang/:lang', (c) => {
   const lang = c.req.param('lang');
   if (lang !== 'zh' && lang !== 'en') return c.redirect('/');
-  setCookie(c, 'lang', lang, { path: '/', maxAge: 60 * 60 * 24 * 365, httpOnly: false, sameSite: 'Lax' });
-  const referer = c.req.header('Referer') || '/';
-  return c.redirect(referer);
+  setCookie(c, 'lang', lang, {
+    path: '/',
+    maxAge: 60 * 60 * 24 * 365,
+    httpOnly: false,
+    secure: new URL(c.req.url).protocol === 'https:',
+    sameSite: 'Lax',
+  });
+  const current = new URL(c.req.url);
+  const referer = new URL(c.req.header('Referer') || '/', current);
+  return c.redirect(referer.origin === current.origin ? `${referer.pathname}${referer.search}${referer.hash}` : '/');
 });
 
 // ==========================================
@@ -398,18 +540,20 @@ app.get('/images/*', async (c) => {
   const key = c.req.path.replace('/images/', '');
   const object = await c.env.R2.get(key);
   if (!object) return c.notFound();
+  const contentType = object.httpMetadata?.contentType || '';
+  if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(contentType)) return c.notFound();
   const headers = new Headers();
   object.writeHttpMetadata(headers);
-  headers.set('Cache-Control', 'public, max-age=86400');
+  headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  headers.set('ETag', object.httpEtag);
+  headers.set('X-Content-Type-Options', 'nosniff');
   return new Response(object.body, { headers });
 });
 
 app.get('/robots.txt', (c) => {
   const body = `User-agent: *
 Allow: /
-Disallow: /admin
 Disallow: /api/admin
-Disallow: /login
 
 Sitemap: ${absoluteUrl(c, '/sitemap.xml')}
 `;
@@ -425,7 +569,13 @@ Sitemap: ${absoluteUrl(c, '/sitemap.xml')}
 // ==========================================
 // Hermes Agent API
 // ==========================================
+app.use('/api/admin/*', bodyLimit({
+  maxSize: 2 * 1024 * 1024,
+  onError: (c) => c.json({ error: 'Request body exceeds 2 MiB' }, 413),
+}));
+
 app.use('/api/admin/*', async (c, next) => {
+  c.header('Cache-Control', 'no-store');
   c.header('X-Robots-Tag', 'noindex, nofollow');
   const unauthorized = requireHermesAuth(c);
   if (unauthorized) return unauthorized;
@@ -434,14 +584,23 @@ app.use('/api/admin/*', async (c, next) => {
 
 app.get('/api/admin/content', async (c) => {
   const status = c.req.query('status');
-  const limit = Math.min(Number(c.req.query('limit') || 50), 100);
+  const featured = c.req.query('featured');
+  const limit = parseLimit(c.req.query('limit'), 50, 100);
   const params: unknown[] = [];
   let query = 'SELECT * FROM content_posts';
+  const where: string[] = [];
 
   if (status === 'draft' || status === 'published') {
-    query += ' WHERE status = ?';
+    where.push('status = ?');
     params.push(status);
   }
+
+  if (featured === '0' || featured === '1') {
+    where.push('is_featured = ?');
+    params.push(Number(featured));
+  }
+
+  if (where.length) query += ` WHERE ${where.join(' AND ')}`;
 
   query += ' ORDER BY updated_at DESC LIMIT ?';
   params.push(limit);
@@ -457,24 +616,23 @@ app.get('/api/admin/content/:id', async (c) => {
 });
 
 app.post('/api/admin/content', async (c) => {
-  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-  const titleZh = stringField(body, 'title_zh');
-  const titleEn = stringField(body, 'title_en', titleZh);
-  const bodyZh = stringField(body, 'body_zh');
-  const bodyEn = stringField(body, 'body_en', bodyZh);
-  const slug = stringField(body, 'slug') || generateSlug(titleEn || titleZh);
+  const body = await parseJsonBody(c);
+  const titleZh = requiredStringField(body, 'title_zh', 200);
+  const titleEn = requiredStringField(body, 'title_en', 200);
+  const bodyZh = requiredStringField(body, 'body_zh', 100000);
+  const bodyEn = requiredStringField(body, 'body_en', 100000);
+  const slug = assertSlug(stringField(body, 'slug') || generateSlug(titleEn));
   const status = normalizeContentStatus(stringField(body, 'status'));
-
-  if (!titleZh || !titleEn || !bodyZh || !bodyEn || !slug) {
-    return c.json({ error: 'title_zh, title_en, body_zh, body_en, and slug are required' }, 400);
-  }
-
-  const publishedAt = status === 'published' ? (stringField(body, 'published_at') || new Date().toISOString()) : null;
+  const isFeatured = binaryFlagField(body, 'is_featured', 0);
+  const featuredImageUrl = assertContentImageKey(nullableStringField(body, 'featured_image_url'));
+  const publishedAt = status === 'published'
+    ? (optionalIsoDate(nullableStringField(body, 'published_at'), 'published_at') || new Date().toISOString())
+    : null;
   const result = await c.env.DB.prepare(
-    'INSERT INTO content_posts (title_zh, title_en, slug, excerpt_zh, excerpt_en, body_zh, body_en, status, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO content_posts (title_zh, title_en, slug, excerpt_zh, excerpt_en, body_zh, body_en, status, is_featured, featured_image_url, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
     titleZh, titleEn, slug, nullableStringField(body, 'excerpt_zh'), nullableStringField(body, 'excerpt_en'),
-    bodyZh, bodyEn, status, publishedAt
+    bodyZh, bodyEn, status, isFeatured, featuredImageUrl, publishedAt
   ).run();
 
   const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(result.meta.last_row_id).first<ContentPost>();
@@ -486,23 +644,30 @@ app.put('/api/admin/content/:id', async (c) => {
   const existing = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(id).first<ContentPost>();
   if (!existing) return c.json({ error: 'Content not found' }, 404);
 
-  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const body = await parseJsonBody(c);
   const status = normalizeContentStatus(stringField(body, 'status', existing.status));
   const publishedAt = status === 'published'
-    ? (stringField(body, 'published_at') || existing.published_at || new Date().toISOString())
+    ? (optionalIsoDate(patchedNullableString(body, 'published_at', existing.published_at), 'published_at') || new Date().toISOString())
     : null;
+  const titleZh = stringField(body, 'title_zh', existing.title_zh);
+  const titleEn = stringField(body, 'title_en', existing.title_en);
+  const bodyZh = stringField(body, 'body_zh', existing.body_zh);
+  const bodyEn = stringField(body, 'body_en', existing.body_en);
+  if (!titleZh || !titleEn || !bodyZh || !bodyEn) throw new ApiError(400, 'Bilingual titles and bodies cannot be empty');
 
   await c.env.DB.prepare(
-    `UPDATE content_posts SET title_zh = ?, title_en = ?, slug = ?, excerpt_zh = ?, excerpt_en = ?, body_zh = ?, body_en = ?, status = ?, published_at = ?, updated_at = datetime('now') WHERE id = ?`
+    `UPDATE content_posts SET title_zh = ?, title_en = ?, slug = ?, excerpt_zh = ?, excerpt_en = ?, body_zh = ?, body_en = ?, status = ?, is_featured = ?, featured_image_url = ?, published_at = ?, updated_at = datetime('now') WHERE id = ?`
   ).bind(
-    stringField(body, 'title_zh', existing.title_zh),
-    stringField(body, 'title_en', existing.title_en),
-    stringField(body, 'slug', existing.slug),
-    nullableStringField(body, 'excerpt_zh') ?? existing.excerpt_zh,
-    nullableStringField(body, 'excerpt_en') ?? existing.excerpt_en,
-    stringField(body, 'body_zh', existing.body_zh),
-    stringField(body, 'body_en', existing.body_en),
+    titleZh,
+    titleEn,
+    assertSlug(stringField(body, 'slug', existing.slug)),
+    patchedNullableString(body, 'excerpt_zh', existing.excerpt_zh),
+    patchedNullableString(body, 'excerpt_en', existing.excerpt_en),
+    bodyZh,
+    bodyEn,
     status,
+    binaryFlagField(body, 'is_featured', existing.is_featured),
+    assertContentImageKey(patchedNullableString(body, 'featured_image_url', existing.featured_image_url)),
     publishedAt,
     id
   ).run();
@@ -516,9 +681,36 @@ app.delete('/api/admin/content/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+app.post('/api/admin/images', async (c) => {
+  const contentLength = Number(c.req.header('Content-Length') || 0);
+  if (contentLength > 2 * 1024 * 1024) throw new ApiError(413, 'Image exceeds 2 MiB');
+  const contentType = c.req.header('Content-Type') || '';
+  if (!contentType.toLowerCase().startsWith('multipart/form-data')) throw new ApiError(415, 'Content-Type must be multipart/form-data');
+  const form = await c.req.parseBody();
+  const file = form['file'];
+  if (!(file instanceof File) || file.size === 0) throw new ApiError(400, 'file is required');
+  if (file.size > 2 * 1024 * 1024) throw new ApiError(413, 'Image exceeds 2 MiB');
+  const buffer = await file.arrayBuffer();
+  const detected = detectImageType(new Uint8Array(buffer));
+  if (!detected || detected.mime !== file.type) throw new ApiError(415, 'File content must be a valid PNG, JPEG, WebP, or GIF image');
+  const kindParam = c.req.query('kind');
+  if (kindParam && kindParam !== 'content' && kindParam !== 'logo' && kindParam !== 'logos') throw new ApiError(400, 'kind must be content or logo');
+  const kind = kindParam === 'content' ? 'content' : 'logos';
+  const key = `${kind}/${crypto.randomUUID()}.${detected.extension}`;
+  await c.env.R2.put(key, buffer, { httpMetadata: { contentType: detected.mime } });
+  return c.json({ key, url: absoluteUrl(c, `/images/${key}`) }, 201);
+});
+
+app.delete('/api/admin/images/*', async (c) => {
+  const key = c.req.path.replace('/api/admin/images/', '');
+  if (!/^(?:logos|content)\/[a-f0-9-]+\.(?:png|jpg|webp|gif)$/i.test(key)) throw new ApiError(400, 'Invalid managed image key');
+  await c.env.R2.delete(key);
+  return c.json({ ok: true });
+});
+
 app.get('/api/admin/providers', async (c) => {
   const status = c.req.query('status');
-  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const limit = parseLimit(c.req.query('limit'), 100, 200);
   const params: unknown[] = [];
   let query = 'SELECT * FROM vcc_providers';
 
@@ -531,44 +723,45 @@ app.get('/api/admin/providers', async (c) => {
   params.push(limit);
 
   const providers = await c.env.DB.prepare(query).bind(...params).all<Provider>();
-  const results = await Promise.all(providers.results.map((provider) => apiProviderWithTags(c.env.DB, provider)));
+  const results = await apiProvidersWithTags(c.env.DB, providers.results);
   return c.json({ results });
 });
 
 app.get('/api/admin/providers/:id', async (c) => {
   const provider = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(c.req.param('id')).first<Provider>();
   if (!provider) return c.json({ error: 'Provider not found' }, 404);
-  return c.json(await apiProviderWithTags(c.env.DB, provider));
+  return c.json((await apiProvidersWithTags(c.env.DB, [provider]))[0]);
 });
 
 app.post('/api/admin/providers', async (c) => {
-  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-  const nameZh = stringField(body, 'name_zh');
-  const nameEn = stringField(body, 'name_en', nameZh);
-  const slug = stringField(body, 'slug') || generateSlug(nameEn || nameZh);
-  if (!nameZh || !nameEn || !slug) return c.json({ error: 'name_zh, name_en, and slug are required' }, 400);
+  const body = await parseJsonBody(c);
+  const nameZh = requiredStringField(body, 'name_zh', 120);
+  const nameEn = requiredStringField(body, 'name_en', 120);
+  const slug = assertSlug(stringField(body, 'slug') || generateSlug(nameEn));
+  const tagIds = numberArrayField(body, 'tag_ids');
+  await validateTagIds(c.env.DB, tagIds);
 
   const result = await c.env.DB.prepare(
     'INSERT INTO vcc_providers (name_zh, name_en, website, founded_date, apply_method, desc_zh, desc_en, need_kyc, region, status, logo_url, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
     nameZh,
     nameEn,
-    nullableStringField(body, 'website'),
+    assertSafeWebsite(nullableStringField(body, 'website')),
     nullableStringField(body, 'founded_date'),
     nullableStringField(body, 'apply_method'),
     nullableStringField(body, 'desc_zh'),
     nullableStringField(body, 'desc_en'),
-    numberField(body, 'need_kyc', 0) ? 1 : 0,
+    binaryFlagField(body, 'need_kyc', 0),
     nullableStringField(body, 'region'),
     normalizeActiveStatus(stringField(body, 'status')),
-    nullableStringField(body, 'logo_url'),
+    assertLogoKey(nullableStringField(body, 'logo_url')),
     slug
   ).run();
 
   const providerId = Number(result.meta.last_row_id);
-  await updateProviderTags(c.env.DB, providerId, numberArrayField(body, 'tag_ids'));
+  await updateProviderTags(c.env.DB, providerId, tagIds);
   const provider = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(providerId).first<Provider>();
-  return c.json(provider ? await apiProviderWithTags(c.env.DB, provider) : null, 201);
+  return c.json(provider ? (await apiProvidersWithTags(c.env.DB, [provider]))[0] : null, 201);
 });
 
 app.put('/api/admin/providers/:id', async (c) => {
@@ -576,42 +769,58 @@ app.put('/api/admin/providers/:id', async (c) => {
   const existing = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(id).first<Provider>();
   if (!existing) return c.json({ error: 'Provider not found' }, 404);
 
-  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-  await c.env.DB.prepare(
+  const body = await parseJsonBody(c);
+  const nameZh = stringField(body, 'name_zh', existing.name_zh);
+  const nameEn = stringField(body, 'name_en', existing.name_en);
+  const tagIds = numberArrayField(body, 'tag_ids');
+  await validateTagIds(c.env.DB, tagIds);
+  if (!nameZh || !nameEn) throw new ApiError(400, 'Bilingual provider names cannot be empty');
+  const update = c.env.DB.prepare(
     `UPDATE vcc_providers SET name_zh = ?, name_en = ?, website = ?, founded_date = ?, apply_method = ?, desc_zh = ?, desc_en = ?, need_kyc = ?, region = ?, status = ?, logo_url = ?, slug = ?, updated_at = datetime('now') WHERE id = ?`
   ).bind(
-    stringField(body, 'name_zh', existing.name_zh),
-    stringField(body, 'name_en', existing.name_en),
-    nullableStringField(body, 'website') ?? existing.website,
-    nullableStringField(body, 'founded_date') ?? existing.founded_date,
-    nullableStringField(body, 'apply_method') ?? existing.apply_method,
-    nullableStringField(body, 'desc_zh') ?? existing.desc_zh,
-    nullableStringField(body, 'desc_en') ?? existing.desc_en,
-    body['need_kyc'] === undefined ? existing.need_kyc : (numberField(body, 'need_kyc', existing.need_kyc) ? 1 : 0),
-    nullableStringField(body, 'region') ?? existing.region,
+    nameZh,
+    nameEn,
+    assertSafeWebsite(patchedNullableString(body, 'website', existing.website)),
+    patchedNullableString(body, 'founded_date', existing.founded_date),
+    patchedNullableString(body, 'apply_method', existing.apply_method),
+    patchedNullableString(body, 'desc_zh', existing.desc_zh),
+    patchedNullableString(body, 'desc_en', existing.desc_en),
+    binaryFlagField(body, 'need_kyc', existing.need_kyc),
+    patchedNullableString(body, 'region', existing.region),
     normalizeActiveStatus(stringField(body, 'status', existing.status)),
-    nullableStringField(body, 'logo_url') ?? existing.logo_url,
-    stringField(body, 'slug', existing.slug),
+    assertLogoKey(patchedNullableString(body, 'logo_url', existing.logo_url)),
+    assertSlug(stringField(body, 'slug', existing.slug)),
     id
-  ).run();
+  );
 
-  await updateProviderTags(c.env.DB, Number(id), numberArrayField(body, 'tag_ids'));
+  if (tagIds) {
+    await c.env.DB.batch([
+      update,
+      c.env.DB.prepare('DELETE FROM vcc_provider_tags WHERE provider_id = ?').bind(id),
+      ...tagIds.map((tagId) => c.env.DB.prepare('INSERT INTO vcc_provider_tags (provider_id, tag_id) VALUES (?, ?)').bind(id, tagId)),
+    ]);
+  } else {
+    await update.run();
+  }
   const provider = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(id).first<Provider>();
-  return c.json(provider ? await apiProviderWithTags(c.env.DB, provider) : null);
+  return c.json(provider ? (await apiProvidersWithTags(c.env.DB, [provider]))[0] : null);
 });
 
 app.delete('/api/admin/providers/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM vcc_provider_tags WHERE provider_id = ?').bind(id).run();
-  await c.env.DB.prepare('DELETE FROM vcc_cards WHERE provider_id = ?').bind(id).run();
-  await c.env.DB.prepare('DELETE FROM vcc_providers WHERE id = ?').bind(id).run();
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM vcc_provider_tags WHERE provider_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM vcc_cards WHERE provider_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM vcc_providers WHERE id = ?').bind(id),
+  ]);
   return c.json({ ok: true });
 });
 
 app.get('/api/admin/cards', async (c) => {
   const status = c.req.query('status');
+  const featured = c.req.query('featured');
   const providerId = c.req.query('provider_id');
-  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const limit = parseLimit(c.req.query('limit'), 100, 200);
   const params: unknown[] = [];
   let query = 'SELECT * FROM vcc_cards';
   const where: string[] = [];
@@ -621,8 +830,13 @@ app.get('/api/admin/cards', async (c) => {
     params.push(status);
   }
   if (providerId) {
+    if (!/^\d+$/.test(providerId)) throw new ApiError(400, 'provider_id must be a positive integer');
     where.push('provider_id = ?');
     params.push(providerId);
+  }
+  if (featured === '0' || featured === '1') {
+    where.push('is_featured = ?');
+    params.push(Number(featured));
   }
   if (where.length) query += ` WHERE ${where.join(' AND ')}`;
   query += ' ORDER BY created_at DESC LIMIT ?';
@@ -639,33 +853,37 @@ app.get('/api/admin/cards/:id', async (c) => {
 });
 
 app.post('/api/admin/cards', async (c) => {
-  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const body = await parseJsonBody(c);
   const providerId = optionalNumberField(body, 'provider_id');
-  const bin = stringField(body, 'bin');
-  const cardType = stringField(body, 'card_type');
-  if (!providerId || !bin || !cardType) return c.json({ error: 'provider_id, bin, and card_type are required' }, 400);
+  const bin = requiredStringField(body, 'bin', 19);
+  const cardType = requiredStringField(body, 'card_type', 40);
+  if (!providerId || !Number.isInteger(providerId) || providerId < 1) throw new ApiError(400, 'provider_id must be a positive integer');
+  if (!/^\d{6,19}$/.test(bin)) throw new ApiError(400, 'bin must contain 6 to 19 digits');
+  const provider = await c.env.DB.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(providerId).first<{ slug: string }>();
+  if (!provider) throw new ApiError(400, 'provider_id does not exist');
 
   let slug = stringField(body, 'slug');
-  if (!slug) {
-    const provider = await c.env.DB.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(providerId).first<{ slug: string }>();
-    slug = `${provider?.slug || 'card'}-${bin}`;
-  }
+  if (!slug) slug = `${provider.slug}-${bin}`;
+  assertSlug(slug);
+  const currency = stringField(body, 'currency', 'USD').toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new ApiError(400, 'currency must be a three-letter code');
 
   const result = await c.env.DB.prepare(
-    'INSERT INTO vcc_cards (provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO vcc_cards (provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status, is_featured, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
     providerId,
     bin,
     cardType,
-    stringField(body, 'currency', 'USD'),
-    numberField(body, 'issuance_fee', 0),
-    numberField(body, 'fee_rate', 0),
-    numberField(body, 'monthly_fee', 0),
-    numberField(body, 'initial_load', 0),
+    currency,
+    nonNegativeNumberField(body, 'issuance_fee', 0),
+    nonNegativeNumberField(body, 'fee_rate', 0),
+    nonNegativeNumberField(body, 'monthly_fee', 0),
+    nonNegativeNumberField(body, 'initial_load', 0),
     nullableStringField(body, 'quota'),
     nullableStringField(body, 'usage'),
     nullableStringField(body, 'description'),
     normalizeActiveStatus(stringField(body, 'status')),
+    binaryFlagField(body, 'is_featured', 0),
     slug
   ).run();
 
@@ -678,23 +896,32 @@ app.put('/api/admin/cards/:id', async (c) => {
   const existing = await c.env.DB.prepare('SELECT * FROM vcc_cards WHERE id = ?').bind(id).first<Card>();
   if (!existing) return c.json({ error: 'Card not found' }, 404);
 
-  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const body = await parseJsonBody(c);
+  const providerId = optionalNumberField(body, 'provider_id') ?? existing.provider_id;
+  if (!Number.isInteger(providerId) || providerId < 1) throw new ApiError(400, 'provider_id must be a positive integer');
+  const provider = await c.env.DB.prepare('SELECT id FROM vcc_providers WHERE id = ?').bind(providerId).first<{ id: number }>();
+  if (!provider) throw new ApiError(400, 'provider_id does not exist');
+  const bin = stringField(body, 'bin', existing.bin);
+  if (!/^\d{6,19}$/.test(bin)) throw new ApiError(400, 'bin must contain 6 to 19 digits');
+  const currency = stringField(body, 'currency', existing.currency).toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new ApiError(400, 'currency must be a three-letter code');
   await c.env.DB.prepare(
-    'UPDATE vcc_cards SET provider_id = ?, bin = ?, card_type = ?, currency = ?, issuance_fee = ?, fee_rate = ?, monthly_fee = ?, initial_load = ?, quota = ?, usage = ?, description = ?, status = ?, slug = ? WHERE id = ?'
+    'UPDATE vcc_cards SET provider_id = ?, bin = ?, card_type = ?, currency = ?, issuance_fee = ?, fee_rate = ?, monthly_fee = ?, initial_load = ?, quota = ?, usage = ?, description = ?, status = ?, is_featured = ?, slug = ? WHERE id = ?'
   ).bind(
-    optionalNumberField(body, 'provider_id') ?? existing.provider_id,
-    stringField(body, 'bin', existing.bin),
+    providerId,
+    bin,
     stringField(body, 'card_type', existing.card_type),
-    stringField(body, 'currency', existing.currency),
-    numberField(body, 'issuance_fee', existing.issuance_fee),
-    numberField(body, 'fee_rate', existing.fee_rate),
-    numberField(body, 'monthly_fee', existing.monthly_fee),
-    numberField(body, 'initial_load', existing.initial_load),
-    nullableStringField(body, 'quota') ?? existing.quota,
-    nullableStringField(body, 'usage') ?? existing.usage,
-    nullableStringField(body, 'description') ?? existing.description,
+    currency,
+    nonNegativeNumberField(body, 'issuance_fee', existing.issuance_fee),
+    nonNegativeNumberField(body, 'fee_rate', existing.fee_rate),
+    nonNegativeNumberField(body, 'monthly_fee', existing.monthly_fee),
+    nonNegativeNumberField(body, 'initial_load', existing.initial_load),
+    patchedNullableString(body, 'quota', existing.quota),
+    patchedNullableString(body, 'usage', existing.usage),
+    patchedNullableString(body, 'description', existing.description),
     normalizeActiveStatus(stringField(body, 'status', existing.status)),
-    stringField(body, 'slug', existing.slug),
+    binaryFlagField(body, 'is_featured', existing.is_featured),
+    assertSlug(stringField(body, 'slug', existing.slug)),
     id
   ).run();
 
@@ -719,10 +946,9 @@ app.get('/api/admin/tags/:id', async (c) => {
 });
 
 app.post('/api/admin/tags', async (c) => {
-  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-  const nameZh = stringField(body, 'name_zh');
-  const nameEn = stringField(body, 'name_en', nameZh);
-  if (!nameZh || !nameEn) return c.json({ error: 'name_zh and name_en are required' }, 400);
+  const body = await parseJsonBody(c);
+  const nameZh = requiredStringField(body, 'name_zh', 80);
+  const nameEn = requiredStringField(body, 'name_en', 80);
 
   const result = await c.env.DB.prepare('INSERT INTO vcc_tags (name_zh, name_en, category) VALUES (?, ?, ?)').bind(
     nameZh,
@@ -738,11 +964,11 @@ app.put('/api/admin/tags/:id', async (c) => {
   const existing = await c.env.DB.prepare('SELECT * FROM vcc_tags WHERE id = ?').bind(id).first<Tag>();
   if (!existing) return c.json({ error: 'Tag not found' }, 404);
 
-  const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const body = await parseJsonBody(c);
   await c.env.DB.prepare('UPDATE vcc_tags SET name_zh = ?, name_en = ?, category = ? WHERE id = ?').bind(
     stringField(body, 'name_zh', existing.name_zh),
     stringField(body, 'name_en', existing.name_en),
-    nullableStringField(body, 'category') ?? existing.category,
+    patchedNullableString(body, 'category', existing.category),
     id
   ).run();
   const tag = await c.env.DB.prepare('SELECT * FROM vcc_tags WHERE id = ?').bind(id).first<Tag>();
@@ -751,191 +977,171 @@ app.put('/api/admin/tags/:id', async (c) => {
 
 app.delete('/api/admin/tags/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM vcc_provider_tags WHERE tag_id = ?').bind(id).run();
-  await c.env.DB.prepare('DELETE FROM vcc_tags WHERE id = ?').bind(id).run();
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM vcc_provider_tags WHERE tag_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM vcc_tags WHERE id = ?').bind(id),
+  ]);
   return c.json({ ok: true });
 });
 
 // ==========================================
-// Homepage - Provider Grid
+// Homepage
 // ==========================================
 app.get('/', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
-  const admin = await isLoggedIn(c);
-  const search = c.req.query('q') || '';
-  const tagFilter = c.req.query('tag') || '';
+  const cardSelect = `SELECT c.*, p.name_zh AS provider_name_zh, p.name_en AS provider_name_en, p.slug AS provider_slug, p.logo_url AS provider_logo_url
+    FROM vcc_cards c INNER JOIN vcc_providers p ON p.id = c.provider_id
+    WHERE c.status = ? AND p.status = ?`;
 
-  // Stats
-  const [providerCount, cardCount, tagCount] = await Promise.all([
-    db.prepare('SELECT COUNT(*) as c FROM vcc_providers WHERE status = ?').bind('active').first<{ c: number }>(),
-    db.prepare('SELECT COUNT(*) as c FROM vcc_cards WHERE status = ?').bind('active').first<{ c: number }>(),
-    db.prepare('SELECT COUNT(*) as c FROM vcc_tags').first<{ c: number }>(),
+  const [providerCount, cardCount, tagCount, homepageCards, homepagePosts] = await Promise.all([
+    db.prepare('SELECT COUNT(*) AS c FROM vcc_providers WHERE status = ?').bind('active').first<{ c: number }>(),
+    db.prepare('SELECT COUNT(*) AS c FROM vcc_cards WHERE status = ?').bind('active').first<{ c: number }>(),
+    db.prepare('SELECT COUNT(*) AS c FROM vcc_tags').first<{ c: number }>(),
+    db.prepare(`${cardSelect} ORDER BY c.is_featured DESC, c.created_at DESC LIMIT 6`).bind('active', 'active').all<CardWithProvider>(),
+    db.prepare('SELECT * FROM content_posts WHERE status = ? ORDER BY is_featured DESC, published_at DESC LIMIT 6').bind('published').all<ContentPost>(),
   ]);
-
-  // Get all tags
-  const tags = await db.prepare('SELECT * FROM vcc_tags ORDER BY category, id').all<Tag>();
-
-  // Build provider query
-  let providerQuery = 'SELECT DISTINCT p.* FROM vcc_providers p';
-  const params: string[] = [];
-
-  if (tagFilter) {
-    providerQuery += ' INNER JOIN vcc_provider_tags pt ON p.id = pt.provider_id';
-  }
-
-  providerQuery += ' WHERE p.status = ?';
-  params.push('active');
-
-  if (tagFilter) {
-    providerQuery += ' AND pt.tag_id = ?';
-    params.push(tagFilter);
-  }
-
-  if (search) {
-    providerQuery += ' AND (p.name_zh LIKE ? OR p.name_en LIKE ? OR p.desc_zh LIKE ? OR p.desc_en LIKE ?)';
-    const s = `%${search}%`;
-    params.push(s, s, s, s);
-  }
-
-  providerQuery += ' ORDER BY p.updated_at DESC';
-
-  const stmt = db.prepare(providerQuery);
-  const providers = await stmt.bind(...params).all<Provider>();
-
-  // Get tags and card counts for each provider
-  const providersWithTags: ProviderWithTags[] = await Promise.all(
-    providers.results.map(async (p) => {
-      const [pTags, cardCountResult] = await Promise.all([
-        db.prepare(
-          'SELECT t.* FROM vcc_tags t INNER JOIN vcc_provider_tags pt ON t.id = pt.tag_id WHERE pt.provider_id = ?'
-        ).bind(p.id).all<Tag>(),
-        db.prepare('SELECT COUNT(*) as c FROM vcc_cards WHERE provider_id = ? AND status = ?').bind(p.id, 'active').first<{ c: number }>(),
-      ]);
-      return { ...p, tags: pTags.results, card_count: cardCountResult?.c || 0 };
-    })
-  );
 
   const jsonLd = [
     ...baseJsonLd(c, lang),
     {
       '@context': 'https://schema.org',
       '@type': 'ItemList',
-      name: t('site.title', lang),
-      description: t('site.description', lang),
-      numberOfItems: providers.results.length,
-      itemListElement: providersWithTags.map((p, i) => ({
-        '@type': 'ListItem',
-        position: i + 1,
-        url: absoluteUrl(c, `/provider/${p.slug}`),
-        name: providerName(p, lang),
+      name: t('home.cards', lang),
+      numberOfItems: homepageCards.results.length,
+      itemListElement: homepageCards.results.map((card, index) => ({
+        '@type': 'ListItem', position: index + 1, url: absoluteUrl(c, `/card/${card.slug}`), name: `${card.provider_name_en} ${card.bin}`,
       })),
     },
   ];
 
   return c.html(
-    <Layout title={t('home.hero.title', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, '/')} jsonLd={jsonLd}>
-      {/* Hero Section */}
-      <section class="bg-gradient-to-br from-brand-600 via-brand-700 to-brand-900 text-white py-16">
-        <div class="max-w-7xl mx-auto px-4 text-center">
-          <h1 class="text-4xl md:text-5xl font-bold mb-4">{t('home.hero.title', lang)}</h1>
-          <p class="text-brand-100 text-lg mb-8 max-w-2xl mx-auto">{t('home.hero.desc', lang)}</p>
-          {/* Search */}
-          <form method="get" action="/" class="max-w-xl mx-auto">
-            <div class="flex">
-              <input
-                type="text"
-                name="q"
-                value={search}
-                placeholder={t('home.search', lang)}
-                class="flex-1 px-4 py-3 rounded-l-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-300"
-              />
-              <button type="submit" class="px-6 py-3 bg-brand-500 hover:bg-brand-400 rounded-r-lg font-medium transition-colors">
-                {lang === 'zh' ? '搜索' : 'Search'}
-              </button>
+    <Layout title={t('home.hero.title', lang)} description={t('site.description', lang)} lang={lang} canonicalUrl={absoluteUrl(c, '/')} jsonLd={jsonLd}>
+      <section class="relative overflow-hidden bg-slate-950 text-white">
+        <div class="absolute inset-0" style="background-image: radial-gradient(circle at 12% 10%, rgba(99,102,241,.52), transparent 30rem), radial-gradient(circle at 88% 65%, rgba(6,182,212,.3), transparent 30rem);"></div>
+        <div class="absolute inset-0 opacity-[.08]" style="background-image: linear-gradient(rgba(255,255,255,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.6) 1px, transparent 1px); background-size: 44px 44px;"></div>
+        <div class="relative page-shell grid items-center gap-14 py-20 sm:py-24 lg:grid-cols-[1.08fr_.92fr] lg:py-28">
+          <div>
+            <span class="mb-6 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold tracking-wide text-brand-100 backdrop-blur"><span class="h-1.5 w-1.5 rounded-full bg-accent-400 shadow-[0_0_0_4px_rgba(34,211,238,.12)]"></span>VCC Directory · Independent Comparison</span>
+            <h1 class="max-w-3xl text-4xl font-bold tracking-[-.04em] sm:text-5xl md:text-6xl lg:text-7xl">{t('home.hero.title', lang)}</h1>
+            <p class="mt-6 max-w-2xl text-base leading-8 text-slate-300 sm:text-lg">{t('home.hero.desc', lang)}</p>
+            <div class="mt-9 flex flex-wrap gap-3">
+            <a href="/cards" class="rounded-2xl bg-white px-6 py-3.5 font-bold text-brand-700 shadow-xl shadow-black/20 transition-transform hover:-translate-y-0.5 hover:bg-brand-50">{t('home.view_all_cards', lang)} &rarr;</a>
+            <a href="/content" class="rounded-2xl border border-white/20 bg-white/10 px-6 py-3.5 font-bold text-white backdrop-blur transition-colors hover:bg-white/15">{t('nav.content', lang)}</a>
             </div>
-            {tagFilter && <input type="hidden" name="tag" value={tagFilter} />}
-          </form>
+          </div>
+          <div class="relative mx-auto hidden w-full max-w-md lg:block" aria-hidden="true">
+            <div class="absolute -inset-10 rounded-full bg-brand-500/20 blur-3xl"></div>
+            <div class="relative rotate-2 rounded-[2rem] border border-white/15 bg-white/10 p-3 shadow-2xl shadow-black/30 backdrop-blur-xl">
+              <div class="rounded-[1.4rem] border border-white/10 bg-gradient-to-br from-brand-600/90 via-brand-700/90 to-slate-900 p-7">
+                <div class="flex items-center justify-between"><span class="text-sm font-bold tracking-wide text-white">VCC DIRECTORY</span><span class="rounded-lg border border-white/15 bg-white/10 px-2.5 py-1 text-[10px] font-bold tracking-widest text-accent-100">VIRTUAL</span></div>
+                <div class="mt-14 font-mono text-2xl font-semibold tracking-[.12em] text-white">{homepageCards.results[0]?.bin || '•••• ••••'}</div>
+                <div class="mt-8 flex items-end justify-between"><div><div class="text-[10px] uppercase tracking-widest text-brand-200">{lang === 'zh' ? '服务商' : 'Provider'}</div><div class="mt-1 text-sm font-semibold text-white">{homepageCards.results[0] ? (lang === 'zh' ? homepageCards.results[0].provider_name_zh : homepageCards.results[0].provider_name_en) : 'VCC Directory'}</div></div><div class="flex h-10 w-14 items-center justify-center rounded-xl bg-white/10 text-xs font-black text-white">{homepageCards.results[0]?.card_type || 'VCC'}</div></div>
+              </div>
+            </div>
+            <div class="absolute -bottom-8 -left-8 -rotate-3 rounded-2xl border border-white/15 bg-slate-900/80 px-5 py-4 shadow-xl backdrop-blur"><div class="text-xs text-slate-400">{t('home.stats.cards', lang)}</div><div class="mt-1 text-2xl font-black text-white">{cardCount?.c || 0}<span class="ml-2 text-xs font-semibold text-accent-300">Verified</span></div></div>
+          </div>
         </div>
       </section>
 
-      {/* Stats */}
-      <section class="max-w-7xl mx-auto px-4 -mt-8">
-        <div class="grid grid-cols-3 gap-4">
+      <section class="relative z-10 mx-auto -mt-8 max-w-4xl px-4">
+        <div class="grid grid-cols-3 overflow-hidden rounded-3xl border border-white bg-white/95 shadow-lift backdrop-blur">
           {[
             { label: t('home.stats.platforms', lang), value: providerCount?.c || 0 },
             { label: t('home.stats.cards', lang), value: cardCount?.c || 0 },
             { label: t('home.stats.tags', lang), value: tagCount?.c || 0 },
-          ].map((stat) => (
-            <div class="bg-white rounded-xl shadow-sm p-4 text-center">
-              <div class="text-2xl font-bold text-brand-600">{stat.value}</div>
-              <div class="text-gray-500 text-sm">{stat.label}</div>
-            </div>
+          ].map((stat, index) => (
+            <div class={`px-3 py-5 text-center sm:p-6 ${index > 0 ? 'border-l border-slate-100' : ''}`}><div class="text-2xl font-black tracking-tight text-brand-600 sm:text-3xl">{stat.value}</div><div class="mt-1 text-[11px] font-medium text-slate-500 sm:text-sm">{stat.label}</div></div>
           ))}
         </div>
       </section>
 
-      {/* Tags Filter */}
-      <section class="max-w-7xl mx-auto px-4 mt-8">
-        <div class="flex flex-wrap gap-2">
-          <a
-            href="/"
-            class={`tag-pill px-3 py-1.5 rounded-full text-sm font-medium ${!tagFilter ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 hover:bg-brand-50 border border-gray-200'}`}
-          >
-            {t('home.all', lang)}
-          </a>
-          {tags.results.map((tag) => (
-            <a
-              href={`/?tag=${tag.id}${search ? `&q=${encodeURIComponent(search)}` : ''}`}
-              class={`tag-pill px-3 py-1.5 rounded-full text-sm font-medium ${String(tag.id) === tagFilter ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 hover:bg-brand-50 border border-gray-200'}`}
-            >
-              {tagName(tag, lang)}
-            </a>
-          ))}
-        </div>
+      <section class="page-shell py-16 sm:py-20">
+        <div class="mb-8 flex items-end justify-between gap-4"><div><p class="eyebrow mb-2">VIRTUAL CARDS</p><h2 class="section-title">{t('home.cards', lang)}</h2></div><a href="/cards" class="hidden rounded-xl bg-brand-50 px-4 py-2 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100 sm:block">{t('home.view_all_cards', lang)} &rarr;</a></div>
+        <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{homepageCards.results.map((card) => <CardTile card={card} lang={lang} />)}</div>
       </section>
 
-      {/* Provider Grid */}
-      <section class="max-w-7xl mx-auto px-4 mt-8 pb-8">
-        {providersWithTags.length === 0 ? (
-          <div class="text-center py-16 text-gray-400">
-            <p class="text-lg">{t('home.no_results', lang)}</p>
+      <section class="border-y border-slate-200/70 bg-white/50">
+        <div class="page-shell py-16 sm:py-20">
+          <div class="mb-8 flex items-end justify-between gap-4"><div><p class="eyebrow mb-2">INDUSTRY NEWS</p><h2 class="section-title">{t('home.posts', lang)}</h2></div><a href="/content" class="hidden rounded-xl bg-brand-50 px-4 py-2 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100 sm:block">{t('home.view_all_posts', lang)} &rarr;</a></div>
+          {homepagePosts.results.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{homepagePosts.results.map((post) => <ArticleTile post={post} lang={lang} />)}</div> : <div class="empty-state">{t('content.no_results', lang)}</div>}
+        </div>
+      </section>
+    </Layout>
+  );
+});
+
+// ==========================================
+// Virtual Card Directory
+// ==========================================
+app.get('/cards', async (c) => {
+  const lang = getLang(getCookie(c, 'lang'));
+  const page = publicPageNumber(c.req.query('page'));
+  const search = (c.req.query('q') || '').trim().slice(0, 100);
+  if (!page) return c.redirect(pageUrl('/cards', 1, { q: search }), 301);
+
+  const pageSize = 12;
+  const where = ['c.status = ?', 'p.status = ?'];
+  const params: unknown[] = ['active', 'active'];
+  if (search) {
+    where.push('(c.bin LIKE ? OR c.card_type LIKE ? OR c.currency LIKE ? OR c.usage LIKE ? OR c.description LIKE ? OR p.name_zh LIKE ? OR p.name_en LIKE ?)');
+    const pattern = `%${search}%`;
+    params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+  }
+  const whereSql = where.join(' AND ');
+  const [countRow, cardRows] = await Promise.all([
+    c.env.DB.prepare(`SELECT COUNT(*) AS c FROM vcc_cards c INNER JOIN vcc_providers p ON p.id = c.provider_id WHERE ${whereSql}`).bind(...params).first<{ c: number }>(),
+    c.env.DB.prepare(`SELECT c.*, p.name_zh AS provider_name_zh, p.name_en AS provider_name_en, p.slug AS provider_slug, p.logo_url AS provider_logo_url
+      FROM vcc_cards c INNER JOIN vcc_providers p ON p.id = c.provider_id
+      WHERE ${whereSql} ORDER BY c.is_featured DESC, c.created_at DESC LIMIT ? OFFSET ?`
+    ).bind(...params, pageSize, (page - 1) * pageSize).all<CardWithProvider>(),
+  ]);
+  const total = countRow?.c || 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (page > totalPages) {
+    return c.html(<Layout title={t('cards.title', lang)} lang={lang} canonicalUrl={absoluteUrl(c, '/cards')} noIndex><div class="page-shell py-20"><div class="empty-state">{t('cards.no_results', lang)}</div></div></Layout>, 404);
+  }
+
+  const canonicalPath = search ? '/cards' : pageUrl('/cards', page);
+  const title = page > 1 ? `${t('cards.title', lang)} - ${lang === 'zh' ? `第 ${page} 页` : `Page ${page}`}` : t('cards.title', lang);
+  const jsonLd = [
+    ...baseJsonLd(c, lang),
+    breadcrumbJsonLd(c, [{ name: t('nav.home', lang), path: '/' }, { name: t('cards.title', lang), path: '/cards' }]),
+    {
+      '@context': 'https://schema.org', '@type': 'ItemList', name: title, numberOfItems: cardRows.results.length,
+      itemListElement: cardRows.results.map((card, index) => ({ '@type': 'ListItem', position: (page - 1) * pageSize + index + 1, url: absoluteUrl(c, `/card/${card.slug}`), name: `${card.provider_name_en} ${card.bin}` })),
+    },
+  ];
+
+  return c.html(
+    <Layout
+      title={title}
+      description={t('cards.desc', lang)}
+      lang={lang}
+      canonicalUrl={absoluteUrl(c, canonicalPath)}
+      noIndex={Boolean(search)}
+      followWhenNoIndex={Boolean(search)}
+      prevUrl={page > 1 ? absoluteUrl(c, pageUrl('/cards', page - 1, { q: search })) : undefined}
+      nextUrl={page < totalPages ? absoluteUrl(c, pageUrl('/cards', page + 1, { q: search })) : undefined}
+      jsonLd={jsonLd}
+    >
+      <section class="page-hero">
+        <div class="page-shell py-14 sm:py-16">
+          <nav class="mb-6 text-sm font-medium text-slate-400"><a href="/" class="hover:text-brand-600">{t('nav.home', lang)}</a><span class="mx-2 text-slate-300">/</span><span>{t('cards.title', lang)}</span></nav>
+          <div class="flex flex-col gap-7 lg:flex-row lg:items-end lg:justify-between">
+            <div><p class="eyebrow mb-2">VCC CATALOG</p><h1 class="text-3xl font-bold tracking-tight text-slate-950 md:text-5xl">{t('cards.title', lang)}</h1><p class="mt-4 max-w-2xl leading-7 text-slate-500">{t('cards.desc', lang)}</p></div>
+            <form method="get" action="/cards" class="flex w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-soft focus-within:border-brand-300 focus-within:ring-4 focus-within:ring-brand-100/70">
+              <label for="card-search" class="sr-only">{t('cards.search', lang)}</label>
+              <input id="card-search" type="search" name="q" value={search} placeholder={t('cards.search', lang)} class="min-w-0 flex-1 bg-transparent px-4 py-3 text-slate-900 outline-none placeholder:text-slate-400" />
+              <button type="submit" class="rounded-xl bg-brand-600 px-5 py-3 font-bold text-white shadow-lg shadow-brand-600/20 transition-colors hover:bg-brand-700">{lang === 'zh' ? '搜索' : 'Search'}</button>
+            </form>
           </div>
-        ) : (
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {providersWithTags.map((p) => (
-              <a href={`/provider/${p.slug}`} class="card-hover block bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                <div class="p-6">
-                  <div class="flex items-center space-x-3 mb-3">
-                    {p.logo_url ? (
-                      <img src={`/images/${p.logo_url}`} alt={providerName(p, lang)} class="w-10 h-10 rounded-lg object-cover" />
-                    ) : (
-                      <div class="w-10 h-10 rounded-lg bg-brand-100 flex items-center justify-center text-brand-600 font-bold text-lg">
-                        {providerName(p, lang).charAt(0)}
-                      </div>
-                    )}
-                    <div>
-                      <h3 class="font-semibold text-gray-900">{providerName(p, lang)}</h3>
-                      {p.region && <span class="text-xs text-gray-400">{p.region}</span>}
-                    </div>
-                  </div>
-                  <p class="text-gray-500 text-sm mb-4 line-clamp-2" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
-                    {providerDesc(p, lang)}
-                  </p>
-                  <div class="flex flex-wrap gap-1.5 mb-3">
-                    {p.tags.slice(0, 4).map((tag) => (
-                      <span class="px-2 py-0.5 bg-brand-50 text-brand-600 rounded text-xs">{tagName(tag, lang)}</span>
-                    ))}
-                  </div>
-                  <div class="flex items-center justify-between text-sm">
-                    <span class="text-gray-400">{p.card_count} {t('provider.cards_count', lang)}</span>
-                    <span class="text-brand-600 font-medium">{t('provider.view_detail', lang)} &rarr;</span>
-                  </div>
-                </div>
-              </a>
-            ))}
-          </div>
-        )}
+        </div>
+      </section>
+      <section class="page-shell py-12 sm:py-14">
+        <div class="mb-7 flex items-center justify-between gap-3"><p class="text-sm text-slate-500"><span class="font-bold text-slate-950">{total}</span> {t('cards.results', lang)}</p>{search && <a href="/cards" class="rounded-lg bg-brand-50 px-3 py-1.5 text-sm font-bold text-brand-700 hover:bg-brand-100">{lang === 'zh' ? '清除搜索' : 'Clear search'}</a>}</div>
+        {cardRows.results.length ? <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">{cardRows.results.map((card) => <CardTile card={card} lang={lang} />)}</div> : <div class="empty-state">{t('cards.no_results', lang)}</div>}
+        <Pagination path="/cards" page={page} totalPages={totalPages} query={{ q: search }} lang={lang} />
       </section>
     </Layout>
   );
@@ -947,15 +1153,14 @@ app.get('/', async (c) => {
 app.get('/provider/:slug', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
-  const admin = await isLoggedIn(c);
   const slug = c.req.param('slug');
 
-  const provider = await db.prepare('SELECT * FROM vcc_providers WHERE slug = ?').bind(slug).first<Provider>();
+  const provider = await db.prepare('SELECT * FROM vcc_providers WHERE slug = ? AND status = ?').bind(slug, 'active').first<Provider>();
   if (!provider) {
     return c.html(
-      <Layout title={t('provider.not_found', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/provider/${slug}`)} noIndex>
+      <Layout title={t('provider.not_found', lang)} lang={lang} canonicalUrl={absoluteUrl(c, `/provider/${slug}`)} noIndex>
         <div class="max-w-7xl mx-auto px-4 py-16 text-center">
-          <h1 class="text-2xl font-bold text-gray-900 mb-4">{t('provider.not_found', lang)}</h1>
+          <h1 class="mb-4 text-2xl font-bold text-slate-900">{t('provider.not_found', lang)}</h1>
           <a href="/" class="text-brand-600 hover:underline">{t('provider.back', lang)}</a>
         </div>
       </Layout>,
@@ -997,28 +1202,29 @@ app.get('/provider/:slug', async (c) => {
   ];
 
   return c.html(
-    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/provider/${provider.slug}`)} jsonLd={jsonLd}>
-      <div class="max-w-7xl mx-auto px-4 py-8">
+    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} canonicalUrl={absoluteUrl(c, `/provider/${provider.slug}`)} jsonLd={jsonLd}>
+      <div class="page-shell py-10 sm:py-14">
         {/* Breadcrumb */}
-        <nav class="mb-6 text-sm text-gray-500">
+        <nav class="breadcrumb mb-6">
           <a href="/" class="hover:text-brand-600">{t('nav.home', lang)}</a>
           <span class="mx-2">/</span>
-          <span class="text-gray-900">{providerName(provider, lang)}</span>
+          <span class="text-slate-900">{providerName(provider, lang)}</span>
         </nav>
 
         {/* Provider Header */}
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8">
-          <div class="flex items-start space-x-4">
+        <div class="surface-card relative mb-10 overflow-hidden p-6 sm:p-8">
+          <div class="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-brand-500 to-accent-400"></div>
+          <div class="flex flex-col items-start gap-5 sm:flex-row">
             {provider.logo_url ? (
-              <img src={`/images/${provider.logo_url}`} alt={providerName(provider, lang)} class="w-16 h-16 rounded-xl object-cover" />
+              <img src={`/images/${provider.logo_url}`} alt={providerName(provider, lang)} class="h-16 w-16 rounded-2xl object-cover shadow-md ring-1 ring-slate-100" />
             ) : (
-              <div class="w-16 h-16 rounded-xl bg-brand-100 flex items-center justify-center text-brand-600 font-bold text-2xl">
+              <div class="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-100 to-accent-50 text-2xl font-bold text-brand-700 ring-1 ring-brand-100">
                 {providerName(provider, lang).charAt(0)}
               </div>
             )}
             <div class="flex-1">
-              <h1 class="text-2xl font-bold text-gray-900 mb-1">{providerName(provider, lang)}</h1>
-              <p class="text-gray-500 mb-4">{providerDesc(provider, lang)}</p>
+              <h1 class="mb-2 text-3xl font-bold tracking-tight text-slate-950">{providerName(provider, lang)}</h1>
+              <p class="mb-5 max-w-3xl leading-7 text-slate-500">{providerDesc(provider, lang)}</p>
               <div class="flex flex-wrap gap-2 mb-4">
                 {providerTags.results.map((tag) => (
                   <span class="px-2.5 py-1 bg-brand-50 text-brand-600 rounded-full text-xs font-medium">{tagName(tag, lang)}</span>
@@ -1028,28 +1234,28 @@ app.get('/provider/:slug', async (c) => {
           </div>
 
           {/* Info Grid */}
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-gray-100">
+          <div class="mt-7 grid grid-cols-2 gap-3 border-t border-slate-100 pt-7 md:grid-cols-4">
             {provider.website && (
-              <div>
-                <div class="text-xs text-gray-400 mb-1">{t('provider.website', lang)}</div>
-                <a href={provider.website} target="_blank" rel="noopener noreferrer" class="text-brand-600 hover:underline text-sm">{t('common.visit', lang)}</a>
+              <div class="metric-tile">
+                <div class="mb-1 text-xs text-slate-400">{t('provider.website', lang)}</div>
+                <a href={provider.website} target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-brand-600 hover:underline">{t('common.visit', lang)} ↗</a>
               </div>
             )}
             {provider.founded_date && (
-              <div>
-                <div class="text-xs text-gray-400 mb-1">{t('provider.founded', lang)}</div>
-                <div class="text-sm font-medium text-gray-900">{provider.founded_date}</div>
+              <div class="metric-tile">
+                <div class="mb-1 text-xs text-slate-400">{t('provider.founded', lang)}</div>
+                <div class="text-sm font-semibold text-slate-900">{provider.founded_date}</div>
               </div>
             )}
             {provider.apply_method && (
-              <div>
-                <div class="text-xs text-gray-400 mb-1">{t('provider.apply_method', lang)}</div>
-                <div class="text-sm font-medium text-gray-900">{provider.apply_method}</div>
+              <div class="metric-tile">
+                <div class="mb-1 text-xs text-slate-400">{t('provider.apply_method', lang)}</div>
+                <div class="text-sm font-semibold text-slate-900">{provider.apply_method}</div>
               </div>
             )}
-            <div>
-              <div class="text-xs text-gray-400 mb-1">{t('provider.kyc', lang)}</div>
-              <div class="text-sm font-medium text-gray-900">
+            <div class="metric-tile">
+              <div class="mb-1 text-xs text-slate-400">{t('provider.kyc', lang)}</div>
+              <div class="text-sm font-semibold text-slate-900">
                 {provider.need_kyc ? (
                   <span class="text-amber-600">{t('provider.kyc_yes', lang)}</span>
                 ) : (
@@ -1058,55 +1264,55 @@ app.get('/provider/:slug', async (c) => {
               </div>
             </div>
             {provider.region && (
-              <div>
-                <div class="text-xs text-gray-400 mb-1">{t('provider.region', lang)}</div>
-                <div class="text-sm font-medium text-gray-900">{provider.region}</div>
+              <div class="metric-tile">
+                <div class="mb-1 text-xs text-slate-400">{t('provider.region', lang)}</div>
+                <div class="text-sm font-semibold text-slate-900">{provider.region}</div>
               </div>
             )}
           </div>
         </div>
 
         {/* Card BINs */}
-        <h2 class="text-xl font-bold text-gray-900 mb-4">{t('provider.cards', lang)} ({cards.results.length})</h2>
+        <div class="mb-6 flex items-end justify-between"><div><p class="eyebrow mb-2">AVAILABLE PRODUCTS</p><h2 class="section-title">{t('provider.cards', lang)}</h2></div><span class="rounded-full bg-brand-50 px-3 py-1.5 text-sm font-bold text-brand-700">{cards.results.length}</span></div>
         {cards.results.length === 0 ? (
-          <div class="text-center py-8 text-gray-400">{t('home.no_results', lang)}</div>
+          <div class="empty-state">{t('home.no_results', lang)}</div>
         ) : (
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
             {cards.results.map((card) => (
-              <a href={`/card/${card.slug}`} class="card-hover block bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+              <a href={`/card/${card.slug}`} class="card-hover group block rounded-3xl border border-slate-200/70 bg-white p-6 shadow-soft">
                 <div class="flex items-center justify-between mb-3">
                   <div class="flex items-center space-x-2">
                     <span class={`px-2 py-0.5 rounded text-xs font-bold ${card.card_type === 'Visa' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
                       {card.card_type}
                     </span>
-                    <span class="font-mono font-semibold text-gray-900">{card.bin}</span>
+                    <span class="font-mono font-bold text-slate-900 group-hover:text-brand-600">{card.bin}</span>
                   </div>
-                  <span class="text-xs text-gray-400">{card.currency}</span>
+                  <span class="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">{card.currency}</span>
                 </div>
-                <div class="grid grid-cols-2 gap-3">
+                <div class="grid grid-cols-2 gap-3 rounded-2xl bg-slate-50/80 p-4 ring-1 ring-slate-100">
                   <div>
-                    <div class="text-xs text-gray-400">{t('card.issuance_fee', lang)}</div>
-                    <div class="text-sm font-semibold text-gray-900">
+                    <div class="text-xs text-slate-400">{t('card.issuance_fee', lang)}</div>
+                    <div class="text-sm font-semibold text-slate-900">
                       {card.issuance_fee === 0 ? <span class="text-green-600">{t('common.free', lang)}</span> : `$${card.issuance_fee}`}
                     </div>
                   </div>
                   <div>
-                    <div class="text-xs text-gray-400">{t('card.fee_rate', lang)}</div>
-                    <div class="text-sm font-semibold text-gray-900">{card.fee_rate}%</div>
+                    <div class="text-xs text-slate-400">{t('card.fee_rate', lang)}</div>
+                    <div class="text-sm font-semibold text-slate-900">{card.fee_rate}%</div>
                   </div>
                   <div>
-                    <div class="text-xs text-gray-400">{t('card.monthly_fee', lang)}</div>
-                    <div class="text-sm font-semibold text-gray-900">
+                    <div class="text-xs text-slate-400">{t('card.monthly_fee', lang)}</div>
+                    <div class="text-sm font-semibold text-slate-900">
                       {card.monthly_fee === 0 ? <span class="text-green-600">{t('common.free', lang)}</span> : `$${card.monthly_fee}`}
                     </div>
                   </div>
                   <div>
-                    <div class="text-xs text-gray-400">{t('card.initial_load', lang)}</div>
-                    <div class="text-sm font-semibold text-gray-900">${card.initial_load}</div>
+                    <div class="text-xs text-slate-400">{t('card.initial_load', lang)}</div>
+                    <div class="text-sm font-semibold text-slate-900">${card.initial_load}</div>
                   </div>
                 </div>
                 {card.description && (
-                  <div class="mt-3 text-xs text-gray-400">{card.description}</div>
+                  <div class="mt-4 line-clamp-2 text-sm leading-6 text-slate-500">{card.description}</div>
                 )}
               </a>
             ))}
@@ -1123,18 +1329,17 @@ app.get('/provider/:slug', async (c) => {
 app.get('/card/:slug', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
   const db = c.env.DB;
-  const admin = await isLoggedIn(c);
   const slug = c.req.param('slug');
 
   const card = await db.prepare(
-    'SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en, p.slug as provider_slug FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id WHERE c.slug = ?'
-  ).bind(slug).first<CardWithProvider>();
+    'SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en, p.slug as provider_slug, p.logo_url as provider_logo_url FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id WHERE c.slug = ? AND c.status = ? AND p.status = ?'
+  ).bind(slug, 'active', 'active').first<CardWithProvider>();
 
   if (!card) {
     return c.html(
-      <Layout title={t('card.not_found', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/card/${slug}`)} noIndex>
+      <Layout title={t('card.not_found', lang)} lang={lang} canonicalUrl={absoluteUrl(c, `/card/${slug}`)} noIndex>
         <div class="max-w-7xl mx-auto px-4 py-16 text-center">
-          <h1 class="text-2xl font-bold text-gray-900 mb-4">{t('card.not_found', lang)}</h1>
+          <h1 class="mb-4 text-2xl font-bold text-slate-900">{t('card.not_found', lang)}</h1>
           <a href="/" class="text-brand-600 hover:underline">{t('provider.back', lang)}</a>
         </div>
       </Layout>,
@@ -1148,7 +1353,7 @@ app.get('/card/:slug', async (c) => {
     ...baseJsonLd(c, lang),
     breadcrumbJsonLd(c, [
       { name: t('nav.home', lang), path: '/' },
-      { name: pName, path: `/provider/${card.provider_slug}` },
+      { name: t('cards.title', lang), path: '/cards' },
       { name: `${card.card_type} ${card.bin}`, path: `/card/${card.slug}` },
     ]),
     {
@@ -1167,79 +1372,80 @@ app.get('/card/:slug', async (c) => {
   ];
 
   return c.html(
-    <Layout title={`${card.card_type} ${card.bin}`} description={cardMetaDescription(card, lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/card/${card.slug}`)} jsonLd={jsonLd}>
-      <div class="max-w-4xl mx-auto px-4 py-8">
-        <nav class="mb-6 text-sm text-gray-500">
+    <Layout title={`${card.card_type} ${card.bin}`} description={cardMetaDescription(card, lang)} lang={lang} canonicalUrl={absoluteUrl(c, `/card/${card.slug}`)} jsonLd={jsonLd}>
+      <div class="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
+        <nav class="breadcrumb mb-7">
           <a href="/" class="hover:text-brand-600">{t('nav.home', lang)}</a>
           <span class="mx-2">/</span>
-          <a href={`/provider/${card.provider_slug}`} class="hover:text-brand-600">{pName}</a>
+          <a href="/cards" class="hover:text-brand-600">{t('cards.title', lang)}</a>
           <span class="mx-2">/</span>
-          <span class="text-gray-900">{card.bin}</span>
+          <span class="text-slate-900">{card.bin}</span>
         </nav>
 
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <div class="flex items-center space-x-3 mb-6">
+        <div class="surface-card relative overflow-hidden p-6 sm:p-9">
+          <div class="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-brand-500 to-accent-400"></div>
+          <div class="mb-8 flex items-center space-x-3">
             <span class={`px-3 py-1 rounded-lg text-sm font-bold ${card.card_type === 'Visa' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
               {card.card_type}
             </span>
-            <h1 class="text-2xl font-bold text-gray-900 font-mono">{card.bin}</h1>
+            <h1 class="font-mono text-3xl font-bold tracking-tight text-slate-950">{card.bin}</h1>
           </div>
 
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-            <div class="bg-gray-50 rounded-lg p-4">
-              <div class="text-xs text-gray-400 mb-1">{t('card.issuance_fee', lang)}</div>
-              <div class="text-xl font-bold text-gray-900">
+          <div class="mb-8 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div class="metric-tile">
+              <div class="mb-1 text-xs text-slate-400">{t('card.issuance_fee', lang)}</div>
+              <div class="text-xl font-bold text-slate-900">
                 {card.issuance_fee === 0 ? <span class="text-green-600">{t('common.free', lang)}</span> : `$${card.issuance_fee}`}
               </div>
             </div>
-            <div class="bg-gray-50 rounded-lg p-4">
-              <div class="text-xs text-gray-400 mb-1">{t('card.fee_rate', lang)}</div>
-              <div class="text-xl font-bold text-gray-900">{card.fee_rate}%</div>
+            <div class="metric-tile">
+              <div class="mb-1 text-xs text-slate-400">{t('card.fee_rate', lang)}</div>
+              <div class="text-xl font-bold text-slate-900">{card.fee_rate}%</div>
             </div>
-            <div class="bg-gray-50 rounded-lg p-4">
-              <div class="text-xs text-gray-400 mb-1">{t('card.monthly_fee', lang)}</div>
-              <div class="text-xl font-bold text-gray-900">
+            <div class="metric-tile">
+              <div class="mb-1 text-xs text-slate-400">{t('card.monthly_fee', lang)}</div>
+              <div class="text-xl font-bold text-slate-900">
                 {card.monthly_fee === 0 ? <span class="text-green-600">{t('common.free', lang)}</span> : `$${card.monthly_fee}`}
               </div>
             </div>
-            <div class="bg-gray-50 rounded-lg p-4">
-              <div class="text-xs text-gray-400 mb-1">{t('card.initial_load', lang)}</div>
-              <div class="text-xl font-bold text-gray-900">${card.initial_load}</div>
+            <div class="metric-tile">
+              <div class="mb-1 text-xs text-slate-400">{t('card.initial_load', lang)}</div>
+              <div class="text-xl font-bold text-slate-900">${card.initial_load}</div>
             </div>
           </div>
 
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-gray-100 pt-6">
+          <div class="grid grid-cols-1 gap-5 border-t border-slate-100 pt-7 md:grid-cols-2">
             <div>
-              <div class="text-xs text-gray-400 mb-1">{t('card.provider', lang)}</div>
-              <a href={`/provider/${card.provider_slug}`} class="text-brand-600 hover:underline font-medium">{pName}</a>
+              <div class="mb-1 text-xs text-slate-400">{t('card.provider', lang)}</div>
+              <a href={`/provider/${card.provider_slug}`} class="font-semibold text-brand-600 hover:underline">{pName}</a>
             </div>
             <div>
-              <div class="text-xs text-gray-400 mb-1">{t('card.currency', lang)}</div>
-              <div class="font-medium text-gray-900">{card.currency}</div>
+              <div class="mb-1 text-xs text-slate-400">{t('card.currency', lang)}</div>
+              <div class="font-semibold text-slate-900">{card.currency}</div>
             </div>
             {card.quota && (
               <div>
-                <div class="text-xs text-gray-400 mb-1">{t('card.quota', lang)}</div>
-                <div class="font-medium text-gray-900">{card.quota}</div>
+                <div class="mb-1 text-xs text-slate-400">{t('card.quota', lang)}</div>
+                <div class="font-semibold text-slate-900">{card.quota}</div>
               </div>
             )}
             {card.usage && (
               <div>
-                <div class="text-xs text-gray-400 mb-1">{t('card.usage', lang)}</div>
-                <div class="font-medium text-gray-900">{card.usage}</div>
+                <div class="mb-1 text-xs text-slate-400">{t('card.usage', lang)}</div>
+                <div class="font-semibold text-slate-900">{card.usage}</div>
               </div>
             )}
           </div>
           {card.description && (
-            <div class="mt-6 pt-6 border-t border-gray-100">
-              <div class="text-xs text-gray-400 mb-2">{t('provider.description', lang)}</div>
-              <p class="text-gray-700">{card.description}</p>
+            <div class="mt-6 border-t border-slate-100 pt-6">
+              <div class="mb-2 text-xs text-slate-400">{t('provider.description', lang)}</div>
+              <p class="leading-7 text-slate-600">{card.description}</p>
             </div>
           )}
         </div>
 
-        <div class="mt-6">
-          <a href={`/provider/${card.provider_slug}`} class="text-brand-600 hover:underline text-sm">&larr; {t('card.back_provider', lang)}</a>
+        <div class="mt-7">
+          <a href={`/provider/${card.provider_slug}`} class="button-secondary text-sm">&larr; {t('card.back_provider', lang)}</a>
         </div>
       </div>
     </Layout>
@@ -1251,104 +1457,52 @@ app.get('/card/:slug', async (c) => {
 // ==========================================
 app.get('/content', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
-  const admin = await isLoggedIn(c);
-  const csrfToken = admin ? getCsrfToken(c) : '';
-  const posts = admin
-    ? await c.env.DB.prepare('SELECT * FROM content_posts ORDER BY updated_at DESC').all<ContentPost>()
-    : await c.env.DB.prepare(
-      'SELECT * FROM content_posts WHERE status = ? ORDER BY published_at DESC, updated_at DESC'
-    ).bind('published').all<ContentPost>();
-  const publishedPosts = posts.results.filter((post) => post.status === 'published');
-
+  const page = publicPageNumber(c.req.query('page'));
+  if (!page) return c.redirect('/content', 301);
+  const pageSize = 9;
+  const [countRow, posts] = await Promise.all([
+    c.env.DB.prepare('SELECT COUNT(*) AS c FROM content_posts WHERE status = ?').bind('published').first<{ c: number }>(),
+    c.env.DB.prepare('SELECT * FROM content_posts WHERE status = ? ORDER BY published_at DESC, updated_at DESC LIMIT ? OFFSET ?').bind('published', pageSize, (page - 1) * pageSize).all<ContentPost>(),
+  ]);
+  const total = countRow?.c || 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (page > totalPages) {
+    return c.html(<Layout title={t('content.title', lang)} lang={lang} canonicalUrl={absoluteUrl(c, '/content')} noIndex><div class="page-shell py-20"><div class="empty-state">{t('content.no_results', lang)}</div></div></Layout>, 404);
+  }
+  const canonicalPath = pageUrl('/content', page);
+  const title = page > 1 ? `${t('content.title', lang)} - ${lang === 'zh' ? `第 ${page} 页` : `Page ${page}`}` : t('content.title', lang);
   const jsonLd = [
     ...baseJsonLd(c, lang),
-    breadcrumbJsonLd(c, [
-      { name: t('nav.home', lang), path: '/' },
-      { name: t('content.title', lang), path: '/content' },
-    ]),
+    breadcrumbJsonLd(c, [{ name: t('nav.home', lang), path: '/' }, { name: t('content.title', lang), path: '/content' }]),
     {
-      '@context': 'https://schema.org',
-      '@type': 'Blog',
-      name: t('content.title', lang),
-      description: t('content.desc', lang),
-      url: absoluteUrl(c, '/content'),
-      blogPost: publishedPosts.map((post) => ({
-        '@type': 'BlogPosting',
-        headline: contentTitle(post, lang),
-        url: absoluteUrl(c, `/content/${post.slug}`),
-        datePublished: post.published_at,
-        dateModified: post.updated_at,
+      '@context': 'https://schema.org', '@type': 'Blog', name: title, description: t('content.desc', lang), url: absoluteUrl(c, canonicalPath),
+      blogPost: posts.results.map((post) => ({
+        '@type': 'BlogPosting', headline: contentTitle(post, lang), url: absoluteUrl(c, `/content/${post.slug}`), datePublished: post.published_at, dateModified: post.updated_at,
+        ...(post.featured_image_url ? { image: absoluteUrl(c, `/images/${post.featured_image_url}`) } : {}),
       })),
     },
   ];
-
   return c.html(
-    <Layout title={t('content.title', lang)} description={t('content.desc', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, '/content')} jsonLd={jsonLd}>
-      <section class="bg-white border-b border-gray-200">
-        <div class="max-w-7xl mx-auto px-4 py-12">
-          <div class="flex items-start justify-between gap-4">
-            <div>
-              <h1 class="text-3xl font-bold text-gray-900 mb-3">{t('content.title', lang)}</h1>
-              <p class="text-gray-500 max-w-2xl">{t('content.desc', lang)}</p>
-            </div>
-            {admin && (
-              <a href="/admin/content/new" class="shrink-0 px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
-                + {t('admin.add_content', lang)}
-              </a>
-            )}
-          </div>
+    <Layout
+      title={title}
+      description={t('content.desc', lang)}
+      lang={lang}
+      canonicalUrl={absoluteUrl(c, canonicalPath)}
+      prevUrl={page > 1 ? absoluteUrl(c, pageUrl('/content', page - 1)) : undefined}
+      nextUrl={page < totalPages ? absoluteUrl(c, pageUrl('/content', page + 1)) : undefined}
+      jsonLd={jsonLd}
+    >
+      <section class="page-hero">
+        <div class="page-shell py-14 sm:py-16">
+          <nav class="mb-6 text-sm font-medium text-slate-400"><a href="/" class="hover:text-brand-600">{t('nav.home', lang)}</a><span class="mx-2 text-slate-300">/</span><span>{t('content.title', lang)}</span></nav>
+          <p class="eyebrow mb-3">VCC INDUSTRY INSIGHTS</p>
+          <h1 class="text-3xl font-bold tracking-tight text-slate-950 md:text-5xl">{t('content.title', lang)}</h1>
+          <p class="mt-4 max-w-2xl leading-7 text-slate-500">{t('content.desc', lang)}</p>
         </div>
       </section>
-
-      <section class="max-w-7xl mx-auto px-4 py-8">
-        <h2 class="text-xl font-bold text-gray-900 mb-4">{t('content.latest', lang)}</h2>
-        {posts.results.length === 0 ? (
-          <div class="text-center py-16 text-gray-400">{t('content.no_results', lang)}</div>
-        ) : (
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {posts.results.map((post) => (
-              <div class="card-hover bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                <div class="p-6">
-                  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-3">
-                  <h3 class="text-lg font-semibold text-gray-900 leading-snug">
-                    {post.status === 'published' ? (
-                      <a href={`/content/${post.slug}`} class="hover:text-brand-600">{contentTitle(post, lang)}</a>
-                    ) : (
-                      contentTitle(post, lang)
-                    )}
-                  </h3>
-                  <div class="flex shrink-0 items-center gap-2">
-                    {admin && (
-                      <span class={`px-2 py-0.5 rounded text-xs font-medium ${post.status === 'published' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {post.status === 'published' ? (lang === 'zh' ? '已发布' : 'Published') : (lang === 'zh' ? '草稿' : 'Draft')}
-                      </span>
-                    )}
-                    {post.published_at && <span class="text-xs text-gray-400">{post.published_at.slice(0, 10)}</span>}
-                  </div>
-                  </div>
-                  {contentExcerpt(post, lang) && <p class="text-gray-500 text-sm mb-4">{contentExcerpt(post, lang)}</p>}
-                  {post.status === 'published' ? (
-                    <a href={`/content/${post.slug}`} class="text-brand-600 font-medium text-sm">{t('content.read_more', lang)} &rarr;</a>
-                  ) : (
-                    <span class="text-gray-400 text-sm">{lang === 'zh' ? '草稿未公开' : 'Draft is not public'}</span>
-                  )}
-                </div>
-                {admin && (
-                  <div class="flex items-center justify-between gap-3 border-t border-gray-100 bg-gray-50 px-6 py-3">
-                    <span class="text-xs text-gray-400">{lang === 'zh' ? '管理操作' : 'Admin actions'}</span>
-                    <div class="flex items-start gap-3">
-                      <a href={`/admin/content/${post.id}/edit`} class="inline-flex h-7 items-center rounded-md px-2 text-xs font-medium leading-none text-brand-600 hover:bg-brand-50">{t('admin.edit', lang)}</a>
-                      <form method="post" action={`/admin/content/${post.id}/delete`} class="m-0 flex items-start" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
-                        <input type="hidden" name="csrf_token" value={csrfToken} />
-                        <button type="submit" class="inline-flex h-7 items-center rounded-md border-0 bg-transparent px-2 py-0 text-xs font-medium leading-none text-red-500 hover:bg-red-50">{t('admin.delete', lang)}</button>
-                      </form>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+      <section class="page-shell py-12 sm:py-14">
+        {posts.results.length ? <div class="grid grid-cols-1 gap-7 md:grid-cols-2 lg:grid-cols-3">{posts.results.map((post) => <ArticleTile post={post} lang={lang} prominent />)}</div> : <div class="empty-state">{t('content.no_results', lang)}</div>}
+        <Pagination path="/content" page={page} totalPages={totalPages} lang={lang} />
       </section>
     </Layout>
   );
@@ -1356,15 +1510,14 @@ app.get('/content', async (c) => {
 
 app.get('/content/:slug', async (c) => {
   const lang = getLang(getCookie(c, 'lang'));
-  const admin = await isLoggedIn(c);
   const slug = c.req.param('slug');
   const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE slug = ? AND status = ?').bind(slug, 'published').first<ContentPost>();
 
   if (!post) {
     return c.html(
-      <Layout title={t('content.not_found', lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/content/${slug}`)} noIndex>
+      <Layout title={t('content.not_found', lang)} lang={lang} canonicalUrl={absoluteUrl(c, `/content/${slug}`)} noIndex>
         <div class="max-w-7xl mx-auto px-4 py-16 text-center">
-          <h1 class="text-2xl font-bold text-gray-900 mb-4">{t('content.not_found', lang)}</h1>
+          <h1 class="mb-4 text-2xl font-bold text-slate-900">{t('content.not_found', lang)}</h1>
           <a href="/content" class="text-brand-600 hover:underline">{t('content.back', lang)}</a>
         </div>
       </Layout>,
@@ -1390,24 +1543,27 @@ app.get('/content/:slug', async (c) => {
       datePublished: post.published_at,
       dateModified: post.updated_at,
       publisher: { '@id': `${siteOrigin(c)}/#organization` },
+      ...(post.featured_image_url ? { image: absoluteUrl(c, `/images/${post.featured_image_url}`) } : {}),
     },
   ];
 
   return c.html(
-    <Layout title={contentTitle(post, lang)} description={contentExcerpt(post, lang)} lang={lang} isAdmin={admin} canonicalUrl={absoluteUrl(c, `/content/${post.slug}`)} ogType="article" jsonLd={jsonLd}>
-      <article class="max-w-3xl mx-auto px-4 py-8">
-        <nav class="mb-6 text-sm text-gray-500">
+    <Layout title={contentTitle(post, lang)} description={contentExcerpt(post, lang)} lang={lang} canonicalUrl={absoluteUrl(c, `/content/${post.slug}`)} ogType="article" ogImage={post.featured_image_url ? absoluteUrl(c, `/images/${post.featured_image_url}`) : undefined} jsonLd={jsonLd}>
+      <article class="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-14">
+        <nav class="breadcrumb mb-8">
           <a href="/" class="hover:text-brand-600">{t('nav.home', lang)}</a>
           <span class="mx-2">/</span>
           <a href="/content" class="hover:text-brand-600">{t('content.title', lang)}</a>
         </nav>
-        <header class="mb-8">
-          <h1 class="text-3xl font-bold text-gray-900 mb-3">{contentTitle(post, lang)}</h1>
-          {post.published_at && <div class="text-sm text-gray-400">{post.published_at.slice(0, 10)}</div>}
-          {contentExcerpt(post, lang) && <p class="text-gray-500 mt-4">{contentExcerpt(post, lang)}</p>}
+        <header class="mb-10 text-center">
+          <p class="eyebrow mb-4">{t('content.title', lang)}</p>
+          <h1 class="text-3xl font-bold leading-[1.12] tracking-[-.035em] text-slate-950 md:text-5xl">{contentTitle(post, lang)}</h1>
+          {post.published_at && <time datetime={post.published_at} class="mt-4 block text-sm font-medium text-slate-400">{post.published_at.slice(0, 10)}</time>}
+          {contentExcerpt(post, lang) && <p class="mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-500">{contentExcerpt(post, lang)}</p>}
         </header>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <div class="content-prose text-gray-700 leading-7" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+        {post.featured_image_url && <img src={`/images/${post.featured_image_url}`} alt={contentTitle(post, lang)} width="960" height="540" class="mb-8 aspect-[16/9] w-full rounded-3xl object-cover shadow-lift" />}
+        <div class="surface-card p-6 md:p-12">
+          <div class="content-prose text-[1.02rem] leading-8 text-slate-700" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
         </div>
       </article>
     </Layout>
@@ -1423,7 +1579,7 @@ app.get('/sitemap.xml', async (c) => {
 
   const [providers, cards, posts] = await Promise.all([
     db.prepare('SELECT slug, updated_at FROM vcc_providers WHERE status = ? ORDER BY updated_at DESC').bind('active').all<{ slug: string; updated_at: string }>(),
-    db.prepare('SELECT c.slug, c.created_at FROM vcc_cards c WHERE c.status = ? ORDER BY c.created_at DESC').bind('active').all<{ slug: string; created_at: string }>(),
+    db.prepare('SELECT c.slug, c.created_at FROM vcc_cards c INNER JOIN vcc_providers p ON p.id = c.provider_id WHERE c.status = ? AND p.status = ? ORDER BY c.created_at DESC').bind('active', 'active').all<{ slug: string; created_at: string }>(),
     db.prepare('SELECT slug, updated_at FROM content_posts WHERE status = ? ORDER BY published_at DESC').bind('published').all<{ slug: string; updated_at: string }>(),
   ]);
 
@@ -1434,6 +1590,12 @@ app.get('/sitemap.xml', async (c) => {
     <loc>${origin}/</loc>
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
+  </url>`);
+
+  urls.push(`  <url>
+    <loc>${origin}/cards</loc>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
   </url>`);
 
   // Provider pages
@@ -1481,1131 +1643,8 @@ ${urls.join('\n')}
     headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' },
   });
 });
-
-// ==========================================
-// Login
-// ==========================================
-app.get('/login', (c) => {
-  const lang = getLang(getCookie(c, 'lang'));
-  const error = c.req.query('error');
-
-  return c.html(
-    <Layout title={t('login.title', lang)} lang={lang} canonicalUrl={absoluteUrl(c, '/login')} noIndex>
-      <div class="min-h-[60vh] flex items-center justify-center py-12 px-4">
-        <div class="max-w-md w-full bg-white rounded-xl shadow-sm border border-gray-100 p-8">
-          <h1 class="text-2xl font-bold text-gray-900 text-center mb-8">{t('login.title', lang)}</h1>
-          {error && (
-            <div class="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 mb-6 text-sm">
-              {t('login.error', lang)}
-            </div>
-          )}
-          <form method="post" action="/login">
-            <div class="mb-4">
-              <label class="block text-sm font-medium text-gray-700 mb-1">{t('login.username', lang)}</label>
-              <input type="text" name="username" required class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-            </div>
-            <div class="mb-6">
-              <label class="block text-sm font-medium text-gray-700 mb-1">{t('login.password', lang)}</label>
-              <input type="password" name="password" required class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-            </div>
-            <button type="submit" class="w-full py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors">
-              {t('login.submit', lang)}
-            </button>
-          </form>
-        </div>
-      </div>
-    </Layout>
-  );
-});
-
-app.post('/login', async (c) => {
-  const db = c.env.DB;
-  const body = await c.req.parseBody();
-  const username = String(body['username'] || '');
-  const password = String(body['password'] || '');
-
-  const user = await db.prepare('SELECT id, password_hash FROM admin_users WHERE username = ?').bind(username).first<{ id: number; password_hash: string }>();
-
-  if (!user || !(await verifyPassword(password, user.password_hash))) {
-    return c.redirect('/login?error=1');
-  }
-
-  setCookie(c, 'admin_session', await createSessionCookie(c, user.id), {
-    path: '/',
-    httpOnly: true,
-    secure: isSecureRequest(c),
-    sameSite: 'Lax',
-    maxAge: 60 * 60 * 24, // 24 hours
-  });
-  return c.redirect('/admin');
-});
-
-app.get('/logout', (c) => {
-  deleteCookie(c, 'admin_session', { path: '/' });
-  deleteCookie(c, 'csrf_token', { path: '/admin' });
-  return c.redirect('/');
-});
-
-// ==========================================
-// Admin Middleware
-// ==========================================
-app.use('/admin/*', async (c, next) => {
-  if (!(await isLoggedIn(c))) return c.redirect('/login');
-  if (c.req.method === 'POST' && !(await verifyCsrf(c))) return c.text('Invalid CSRF token', 403);
-  await next();
-});
-
-// ==========================================
-// Admin Dashboard
-// ==========================================
-app.get('/admin', async (c) => {
-  const lang = getLang(getCookie(c, 'lang'));
-  const db = c.env.DB;
-  const csrfToken = getCsrfToken(c);
-
-  const [providers, cards, posts, tags] = await Promise.all([
-    db.prepare('SELECT * FROM vcc_providers ORDER BY updated_at DESC').all<Provider>(),
-    db.prepare('SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en, p.slug as provider_slug FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id ORDER BY c.created_at DESC').all<CardWithProvider>(),
-    db.prepare('SELECT * FROM content_posts ORDER BY updated_at DESC').all<ContentPost>(),
-    db.prepare('SELECT * FROM vcc_tags ORDER BY category, id').all<Tag>(),
-  ]);
-
-  return c.html(
-    <Layout title={t('admin.title', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin')} noIndex>
-      <div class="max-w-7xl mx-auto px-4 py-8">
-        <div class="flex items-center justify-between mb-8">
-          <h1 class="text-2xl font-bold text-gray-900">{t('admin.title', lang)}</h1>
-          <a href="/admin/password" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors">
-            {t('admin.change_password', lang)}
-          </a>
-        </div>
-
-        {/* Providers Section */}
-        <div class="mb-12">
-          <div class="flex items-center justify-between mb-4">
-            <h2 class="text-xl font-bold text-gray-900">{t('admin.providers', lang)}</h2>
-            <a href="/admin/provider/new" class="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
-              + {t('admin.add_provider', lang)}
-            </a>
-          </div>
-          <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">ID</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">Slug</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{lang === 'zh' ? '中文名' : 'Chinese Name'}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{lang === 'zh' ? '英文名' : 'English Name'}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('provider.region', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('common.status', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.actions', lang)}</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                  {providers.results.map((p) => (
-                    <tr class="hover:bg-gray-50">
-                      <td class="px-4 py-3 text-gray-500">{p.id}</td>
-                      <td class="px-4 py-3 font-mono text-xs text-gray-500">{p.slug}</td>
-                      <td class="px-4 py-3 font-medium text-gray-900">{p.name_zh}</td>
-                      <td class="px-4 py-3 text-gray-700">{p.name_en}</td>
-                      <td class="px-4 py-3 text-gray-500">{p.region || '-'}</td>
-                      <td class="px-4 py-3">
-                        <span class={`px-2 py-0.5 rounded text-xs font-medium ${p.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                          {p.status === 'active' ? t('common.active', lang) : t('common.inactive', lang)}
-                        </span>
-                      </td>
-                      <td class="px-4 py-3">
-                        <a href={`/admin/provider/${p.id}/edit`} class="text-brand-600 hover:underline text-xs">{t('admin.edit', lang)}</a>
-                        <form method="post" action={`/admin/provider/${p.id}/delete`} class="inline ml-2" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
-                          <input type="hidden" name="csrf_token" value={csrfToken} />
-                          <button type="submit" class="text-red-500 hover:underline text-xs">{t('admin.delete', lang)}</button>
-                        </form>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        {/* Cards Section */}
-        <div class="mb-12">
-          <div class="flex items-center justify-between mb-4">
-            <h2 class="text-xl font-bold text-gray-900">{t('admin.cards', lang)}</h2>
-            <a href="/admin/card/new" class="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
-              + {t('admin.add_card', lang)}
-            </a>
-          </div>
-          <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">ID</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">Slug</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('card.provider', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">BIN</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('card.type', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('card.issuance_fee', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('card.fee_rate', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('card.monthly_fee', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('card.initial_load', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.actions', lang)}</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                  {cards.results.map((card) => (
-                    <tr class="hover:bg-gray-50">
-                      <td class="px-4 py-3 text-gray-500">{card.id}</td>
-                      <td class="px-4 py-3 font-mono text-xs text-gray-500">{card.slug}</td>
-                      <td class="px-4 py-3 text-gray-700">{lang === 'zh' ? card.provider_name_zh : card.provider_name_en}</td>
-                      <td class="px-4 py-3 font-mono font-medium text-gray-900">{card.bin}</td>
-                      <td class="px-4 py-3">
-                        <span class={`px-2 py-0.5 rounded text-xs font-bold ${card.card_type === 'Visa' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
-                          {card.card_type}
-                        </span>
-                      </td>
-                      <td class="px-4 py-3">${card.issuance_fee}</td>
-                      <td class="px-4 py-3">{card.fee_rate}%</td>
-                      <td class="px-4 py-3">${card.monthly_fee}</td>
-                      <td class="px-4 py-3">${card.initial_load}</td>
-                      <td class="px-4 py-3">
-                        <a href={`/admin/card/${card.id}/edit`} class="text-brand-600 hover:underline text-xs">{t('admin.edit', lang)}</a>
-                        <form method="post" action={`/admin/card/${card.id}/delete`} class="inline ml-2" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
-                          <input type="hidden" name="csrf_token" value={csrfToken} />
-                          <button type="submit" class="text-red-500 hover:underline text-xs">{t('admin.delete', lang)}</button>
-                        </form>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        {/* Content Section */}
-        <div class="mb-12">
-          <div class="flex items-center justify-between mb-4">
-            <div>
-              <h2 class="text-xl font-bold text-gray-900">{t('admin.content', lang)}</h2>
-              <p class="text-sm text-gray-500 mt-1">{lang === 'zh' ? '管理文章、草稿和公开内容' : 'Manage articles, drafts, and published content'}</p>
-            </div>
-            <a href="/admin/content/new" class="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
-              + {t('admin.add_content', lang)}
-            </a>
-          </div>
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {posts.results.length === 0 ? (
-              <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center text-gray-400 lg:col-span-2">
-                {t('content.no_results', lang)}
-              </div>
-            ) : posts.results.map((post) => (
-              <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-                <div class="flex items-start justify-between gap-4 mb-3">
-                  <div>
-                    <h3 class="font-semibold text-gray-900 mb-1">{contentTitle(post, lang)}</h3>
-                    <div class="font-mono text-xs text-gray-400">/{post.slug}</div>
-                  </div>
-                  <span class={`shrink-0 px-2 py-0.5 rounded text-xs font-medium ${post.status === 'published' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                    {post.status === 'published' ? (lang === 'zh' ? '已发布' : 'Published') : (lang === 'zh' ? '草稿' : 'Draft')}
-                  </span>
-                </div>
-                <p class="text-sm text-gray-500 line-clamp-2" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
-                  {contentExcerpt(post, lang) || (lang === 'zh' ? '暂无摘要' : 'No excerpt')}
-                </p>
-                <div class="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
-                  <div class="text-xs text-gray-400">
-                    {lang === 'zh' ? '更新' : 'Updated'} {post.updated_at ? post.updated_at.slice(0, 10) : '-'}
-                    {post.published_at && <span class="ml-2">{lang === 'zh' ? '发布' : 'Published'} {post.published_at.slice(0, 10)}</span>}
-                  </div>
-                  <div class="flex items-start gap-2">
-                    {post.status === 'published' && <a href={`/content/${post.slug}`} class="text-gray-500 hover:underline text-xs" target="_blank">View</a>}
-                    <a href={`/admin/content/${post.id}/edit`} class="inline-flex h-7 items-center rounded-md px-2 text-xs font-medium leading-none text-brand-600 hover:bg-brand-50">{t('admin.edit', lang)}</a>
-                    <form method="post" action={`/admin/content/${post.id}/delete`} class="m-0 flex items-start" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
-                      <input type="hidden" name="csrf_token" value={csrfToken} />
-                      <button type="submit" class="inline-flex h-7 items-center rounded-md border-0 bg-transparent px-2 py-0 text-xs font-medium leading-none text-red-500 hover:bg-red-50">{t('admin.delete', lang)}</button>
-                    </form>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Tags Section */}
-        <div>
-          <div class="flex items-center justify-between mb-4">
-            <h2 class="text-xl font-bold text-gray-900">{t('admin.tags', lang)}</h2>
-          </div>
-
-          {/* Add Tag Form */}
-          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-4">
-            <form method="post" action="/admin/tag/new" class="flex flex-wrap items-end gap-4">
-              <input type="hidden" name="csrf_token" value={csrfToken} />
-              <div class="flex-1 min-w-[150px]">
-                <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.tag_name_zh', lang)} *</label>
-                <input type="text" name="name_zh" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none text-sm" />
-              </div>
-              <div class="flex-1 min-w-[150px]">
-                <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.tag_name_en', lang)} *</label>
-                <input type="text" name="name_en" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none text-sm" />
-              </div>
-              <div class="w-40">
-                <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.tag_category', lang)}</label>
-                <select name="category" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none text-sm">
-                  <option value="payment">{t('admin.tag_category_payment', lang)}</option>
-                  <option value="compliance">{t('admin.tag_category_compliance', lang)}</option>
-                  <option value="feature">{t('admin.tag_category_feature', lang)}</option>
-                  <option value="type">{t('admin.tag_category_type', lang)}</option>
-                </select>
-              </div>
-              <button type="submit" class="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors">
-                + {t('admin.add_tag', lang)}
-              </button>
-            </form>
-          </div>
-
-          {/* Tags Table */}
-          <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">ID</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.tag_name_zh', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.tag_name_en', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.tag_category', lang)}</th>
-                    <th class="text-left px-4 py-3 font-medium text-gray-500">{t('admin.actions', lang)}</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                  {tags.results.map((tag) => (
-                    <tr class="hover:bg-gray-50">
-                      <td class="px-4 py-3 text-gray-500">{tag.id}</td>
-                      <td class="px-4 py-3 font-medium text-gray-900">{tag.name_zh}</td>
-                      <td class="px-4 py-3 text-gray-700">{tag.name_en}</td>
-                      <td class="px-4 py-3">
-                        <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{tag.category || '-'}</span>
-                      </td>
-                      <td class="px-4 py-3">
-                        <form method="post" action={`/admin/tag/${tag.id}/delete`} class="inline" onsubmit="return confirm(this.dataset.msg)" data-msg={t('admin.confirm_delete', lang)}>
-                          <input type="hidden" name="csrf_token" value={csrfToken} />
-                          <button type="submit" class="text-red-500 hover:underline text-xs">{t('admin.delete', lang)}</button>
-                        </form>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Layout>
-  );
-});
-
-// ==========================================
-// Admin: Content CRUD
-// ==========================================
-
-function ContentForm({ post, lang, action, csrfToken }: {
-  post?: ContentPost;
-  lang: Lang;
-  action: string;
-  csrfToken: string;
-}) {
-  const bodyZh = contentBodyHtml(post?.body_zh || '');
-  const bodyEn = contentBodyHtml(post?.body_en || '');
-  const editorTools = [
-    { cmd: 'formatBlock', value: 'h2', label: 'H2' },
-    { cmd: 'formatBlock', value: 'h3', label: 'H3' },
-    { cmd: 'formatBlock', value: 'p', label: 'P' },
-    { cmd: 'bold', label: 'B' },
-    { cmd: 'italic', label: 'I' },
-    { cmd: 'underline', label: 'U' },
-    { cmd: 'insertUnorderedList', label: 'UL' },
-    { cmd: 'insertOrderedList', label: 'OL' },
-    { cmd: 'formatBlock', value: 'blockquote', label: '"' },
-    { cmd: 'createLink', label: 'Link' },
-    { cmd: 'removeFormat', label: 'Clear' },
-  ];
-
-  return (
-    <form method="post" action={action} class="space-y-6" data-rich-content-form="true">
-      <input type="hidden" name="csrf_token" value={csrfToken} />
-      <div class="grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-6">
-        <div class="space-y-6">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '中文标题' : 'Chinese Title'} *</label>
-              <input type="text" name="title_zh" required value={post?.title_zh || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '英文标题' : 'English Title'} *</label>
-              <input type="text" name="title_en" required value={post?.title_en || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Slug</label>
-              <input type="text" name="slug" value={post?.slug || ''} placeholder={lang === 'zh' ? '留空自动生成' : 'Leave empty to auto-generate'} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none font-mono text-sm" />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{t('common.status', lang)}</label>
-              <select name="status" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">
-                <option value="draft" selected={(!post || post.status === 'draft')}>{lang === 'zh' ? '草稿' : 'Draft'}</option>
-                <option value="published" selected={post?.status === 'published'}>{lang === 'zh' ? '已发布' : 'Published'}</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '中文摘要' : 'Chinese Excerpt'}</label>
-              <textarea name="excerpt_zh" rows={3} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">{post?.excerpt_zh || ''}</textarea>
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '英文摘要' : 'English Excerpt'}</label>
-              <textarea name="excerpt_en" rows={3} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">{post?.excerpt_en || ''}</textarea>
-            </div>
-          </div>
-
-          <div class="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
-            <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-200 bg-white">
-              <h2 class="font-semibold text-gray-900">{lang === 'zh' ? '富文本正文' : 'Rich Text Body'}</h2>
-              <div class="flex rounded-lg bg-gray-100 p-1">
-                <button type="button" data-tab-target="zh" class="px-3 py-1.5 rounded-md bg-white text-brand-600 text-sm font-medium shadow-sm">{lang === 'zh' ? '中文' : 'ZH'}</button>
-                <button type="button" data-tab-target="en" class="px-3 py-1.5 rounded-md text-gray-500 text-sm font-medium">{lang === 'zh' ? '英文' : 'EN'}</button>
-              </div>
-            </div>
-
-            {[
-              { key: 'zh', name: 'body_zh', html: bodyZh },
-              { key: 'en', name: 'body_en', html: bodyEn },
-            ].map((editor) => (
-              <div data-editor-panel={editor.key} class={editor.key === 'en' ? 'hidden' : ''}>
-                <input type="hidden" name={editor.name} value={editor.html} data-editor-input={editor.key} />
-                <div class="flex flex-wrap items-center gap-1 px-3 py-2 border-b border-gray-200 bg-white">
-                  {editorTools.map((tool) => (
-                    <button type="button" data-editor-command={tool.cmd} data-editor-value={tool.value || ''} class="min-w-9 h-8 px-2 rounded-md border border-gray-200 bg-white text-xs font-semibold text-gray-600 hover:bg-brand-50 hover:text-brand-600">
-                      {tool.label}
-                    </button>
-                  ))}
-                </div>
-                <div
-                  contenteditable={true}
-                  data-editor={editor.key}
-                  data-placeholder={lang === 'zh' ? '在这里编写内容...' : 'Write content here...'}
-                  class="rich-editor content-prose min-h-[360px] bg-white px-4 py-4 text-gray-800 leading-7"
-                  dangerouslySetInnerHTML={{ __html: editor.html }}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <aside class="space-y-4">
-          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-            <h3 class="font-semibold text-gray-900 mb-3">{lang === 'zh' ? '发布设置' : 'Publish Settings'}</h3>
-            <div class="space-y-3 text-sm text-gray-500">
-              <div class="flex justify-between"><span>ID</span><span class="font-mono">{post?.id || '-'}</span></div>
-              <div class="flex justify-between"><span>{lang === 'zh' ? '状态' : 'Status'}</span><span>{post?.status === 'published' ? (lang === 'zh' ? '已发布' : 'Published') : (lang === 'zh' ? '草稿' : 'Draft')}</span></div>
-              <div class="flex justify-between"><span>{lang === 'zh' ? '创建' : 'Created'}</span><span>{post?.created_at ? post.created_at.slice(0, 10) : '-'}</span></div>
-              <div class="flex justify-between"><span>{lang === 'zh' ? '更新' : 'Updated'}</span><span>{post?.updated_at ? post.updated_at.slice(0, 10) : '-'}</span></div>
-            </div>
-          </div>
-          <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-            <h3 class="font-semibold text-gray-900 mb-3">{lang === 'zh' ? '操作' : 'Actions'}</h3>
-            <div class="space-y-3">
-              <button type="submit" class="w-full px-4 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors">
-                {t('admin.save', lang)}
-              </button>
-              {post?.status === 'published' && (
-                <a href={`/content/${post.slug}`} target="_blank" class="block w-full text-center px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors">
-                  {lang === 'zh' ? '查看公开页' : 'View Public Page'}
-                </a>
-              )}
-              <a href="/admin" class="block w-full text-center px-4 py-2.5 bg-gray-100 text-gray-600 rounded-lg font-medium hover:bg-gray-200 transition-colors">
-                {t('admin.cancel', lang)}
-              </a>
-            </div>
-          </div>
-        </aside>
-      </div>
-
-      <script dangerouslySetInnerHTML={{ __html: `
-        (() => {
-          const form = document.querySelector('[data-rich-content-form]');
-          if (!form) return;
-          const sync = () => {
-            form.querySelectorAll('[data-editor]').forEach((editor) => {
-              const key = editor.getAttribute('data-editor');
-              const input = form.querySelector('[data-editor-input="' + key + '"]');
-              if (input) input.value = editor.innerHTML.trim();
-            });
-          };
-          const activateTab = (key) => {
-            form.querySelectorAll('[data-editor-panel]').forEach((panel) => {
-              panel.classList.toggle('hidden', panel.getAttribute('data-editor-panel') !== key);
-            });
-            form.querySelectorAll('[data-tab-target]').forEach((button) => {
-              const active = button.getAttribute('data-tab-target') === key;
-              button.classList.toggle('bg-white', active);
-              button.classList.toggle('text-brand-600', active);
-              button.classList.toggle('shadow-sm', active);
-              button.classList.toggle('text-gray-500', !active);
-            });
-          };
-          form.querySelectorAll('[data-tab-target]').forEach((button) => {
-            button.addEventListener('click', () => activateTab(button.getAttribute('data-tab-target')));
-          });
-          form.querySelectorAll('[data-editor-command]').forEach((button) => {
-            button.addEventListener('click', () => {
-              const panel = button.closest('[data-editor-panel]');
-              const editor = panel && panel.querySelector('[data-editor]');
-              if (!editor) return;
-              editor.focus();
-              const command = button.getAttribute('data-editor-command');
-              let value = button.getAttribute('data-editor-value') || null;
-              if (command === 'createLink') {
-                value = prompt('${lang === 'zh' ? '输入链接地址' : 'Enter URL'}') || '';
-                if (!value) return;
-              }
-              document.execCommand(command, false, value);
-              sync();
-            });
-          });
-          form.querySelectorAll('[data-editor]').forEach((editor) => {
-            editor.addEventListener('input', sync);
-            editor.addEventListener('blur', sync);
-          });
-          form.addEventListener('submit', sync);
-        })();
-      ` }} />
-    </form>
-  );
-}
-
-app.get('/admin/content/new', (c) => {
-  const lang = getLang(getCookie(c, 'lang'));
-  const csrfToken = getCsrfToken(c);
-
-  return c.html(
-    <Layout title={t('admin.add_content', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin/content/new')} noIndex>
-      <div class="max-w-4xl mx-auto px-4 py-8">
-        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.add_content', lang)}</h1>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <ContentForm lang={lang} action="/admin/content/new" csrfToken={csrfToken} />
-        </div>
-      </div>
-    </Layout>
-  );
-});
-
-app.post('/admin/content/new', async (c) => {
-  const body = await c.req.parseBody();
-  const titleZh = String(body['title_zh'] || '').trim();
-  const titleEn = String(body['title_en'] || '').trim();
-  const bodyZh = String(body['body_zh'] || '').trim();
-  const bodyEn = String(body['body_en'] || '').trim();
-  const slug = String(body['slug'] || '').trim() || generateSlug(titleEn || titleZh);
-  const status = normalizeContentStatus(String(body['status'] || 'draft'));
-  const publishedAt = status === 'published' ? new Date().toISOString() : null;
-
-  await c.env.DB.prepare(
-    'INSERT INTO content_posts (title_zh, title_en, slug, excerpt_zh, excerpt_en, body_zh, body_en, status, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(
-    titleZh, titleEn, slug, body['excerpt_zh'] || null, body['excerpt_en'] || null, bodyZh, bodyEn, status, publishedAt
-  ).run();
-
-  return c.redirect('/admin');
-});
-
-app.get('/admin/content/:id/edit', async (c) => {
-  const lang = getLang(getCookie(c, 'lang'));
-  const csrfToken = getCsrfToken(c);
-  const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(c.req.param('id')).first<ContentPost>();
-  if (!post) return c.redirect('/admin');
-
-  return c.html(
-    <Layout title={t('admin.edit_content', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, `/admin/content/${post.id}/edit`)} noIndex>
-      <div class="max-w-4xl mx-auto px-4 py-8">
-        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.edit_content', lang)}: {contentTitle(post, lang)}</h1>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <ContentForm post={post} lang={lang} action={`/admin/content/${post.id}/edit`} csrfToken={csrfToken} />
-        </div>
-      </div>
-    </Layout>
-  );
-});
-
-app.post('/admin/content/:id/edit', async (c) => {
-  const id = c.req.param('id');
-  const existing = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(id).first<ContentPost>();
-  if (!existing) return c.redirect('/admin');
-
-  const body = await c.req.parseBody();
-  const status = normalizeContentStatus(String(body['status'] || 'draft'));
-  const publishedAt = status === 'published' ? (existing.published_at || new Date().toISOString()) : null;
-  const slug = String(body['slug'] || '').trim() || generateSlug(String(body['title_en'] || body['title_zh'] || existing.slug));
-
-  await c.env.DB.prepare(
-    `UPDATE content_posts SET title_zh = ?, title_en = ?, slug = ?, excerpt_zh = ?, excerpt_en = ?, body_zh = ?, body_en = ?, status = ?, published_at = ?, updated_at = datetime('now') WHERE id = ?`
-  ).bind(
-    body['title_zh'], body['title_en'], slug, body['excerpt_zh'] || null, body['excerpt_en'] || null,
-    body['body_zh'], body['body_en'], status, publishedAt, id
-  ).run();
-
-  return c.redirect('/admin');
-});
-
-app.post('/admin/content/:id/delete', async (c) => {
-  await c.env.DB.prepare('DELETE FROM content_posts WHERE id = ?').bind(c.req.param('id')).run();
-  return c.redirect('/admin');
-});
-
-// ==========================================
-// Admin: Tag CRUD
-// ==========================================
-app.post('/admin/tag/new', async (c) => {
-  const db = c.env.DB;
-  const body = await c.req.parseBody();
-  const nameZh = String(body['name_zh'] || '').trim();
-  const nameEn = String(body['name_en'] || '').trim();
-  const category = String(body['category'] || '') || null;
-
-  if (nameZh && nameEn) {
-    await db.prepare('INSERT INTO vcc_tags (name_zh, name_en, category) VALUES (?, ?, ?)').bind(nameZh, nameEn, category).run();
-  }
-
-  return c.redirect('/admin');
-});
-
-app.post('/admin/tag/:id/delete', async (c) => {
-  const id = c.req.param('id');
-  const db = c.env.DB;
-
-  // Delete tag associations first, then the tag itself
-  await db.prepare('DELETE FROM vcc_provider_tags WHERE tag_id = ?').bind(id).run();
-  await db.prepare('DELETE FROM vcc_tags WHERE id = ?').bind(id).run();
-
-  return c.redirect('/admin');
-});
-
-// ==========================================
-// Admin: Change Password
-// ==========================================
-app.get('/admin/password', (c) => {
-  const lang = getLang(getCookie(c, 'lang'));
-  const success = c.req.query('success');
-  const error = c.req.query('error');
-  const csrfToken = getCsrfToken(c);
-
-  return c.html(
-    <Layout title={t('admin.change_password', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin/password')} noIndex>
-      <div class="max-w-lg mx-auto px-4 py-8">
-        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.change_password', lang)}</h1>
-        {success && (
-          <div class="bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 mb-6 text-sm">
-            {t('admin.password_changed', lang)}
-          </div>
-        )}
-        {error === 'old' && (
-          <div class="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 mb-6 text-sm">
-            {t('admin.password_error_old', lang)}
-          </div>
-        )}
-        {error === 'mismatch' && (
-          <div class="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 mb-6 text-sm">
-            {t('admin.password_error_mismatch', lang)}
-          </div>
-        )}
-        {error === 'short' && (
-          <div class="bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 mb-6 text-sm">
-            {t('admin.password_error_short', lang)}
-          </div>
-        )}
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <form method="post" action="/admin/password" class="space-y-5">
-            <input type="hidden" name="csrf_token" value={csrfToken} />
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.old_password', lang)} *</label>
-              <input type="password" name="old_password" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.new_password', lang)} *</label>
-              <input type="password" name="new_password" required minLength={6} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.confirm_password', lang)} *</label>
-              <input type="password" name="confirm_password" required minLength={6} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-            </div>
-            <div class="flex space-x-4">
-              <button type="submit" class="px-6 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors">
-                {t('admin.save', lang)}
-              </button>
-              <a href="/admin" class="px-6 py-2.5 bg-gray-100 text-gray-600 rounded-lg font-medium hover:bg-gray-200 transition-colors">
-                {t('admin.cancel', lang)}
-              </a>
-            </div>
-          </form>
-        </div>
-      </div>
-    </Layout>
-  );
-});
-
-app.post('/admin/password', async (c) => {
-  const db = c.env.DB;
-  const body = await c.req.parseBody();
-  const oldPassword = String(body['old_password'] || '');
-  const newPassword = String(body['new_password'] || '');
-  const confirmPassword = String(body['confirm_password'] || '');
-
-  if (newPassword.length < 6) {
-    return c.redirect('/admin/password?error=short');
-  }
-
-  if (newPassword !== confirmPassword) {
-    return c.redirect('/admin/password?error=mismatch');
-  }
-
-  // Verify old password against the first admin user (current session)
-  const user = await db.prepare('SELECT id, password_hash FROM admin_users ORDER BY id LIMIT 1').first<{ id: number; password_hash: string }>();
-
-  if (!user || !(await verifyPassword(oldPassword, user.password_hash))) {
-    return c.redirect('/admin/password?error=old');
-  }
-
-  // Update password
-  const newHash = await hashPassword(newPassword);
-  await db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?').bind(newHash, user.id).run();
-
-  return c.redirect('/admin/password?success=1');
-});
-
-// ==========================================
-// Admin: Provider CRUD
-// ==========================================
-
-// Provider Form Component
-function ProviderForm({ provider, tags, selectedTags, lang, action, csrfToken }: {
-  provider?: Provider;
-  tags: Tag[];
-  selectedTags: number[];
-  lang: Lang;
-  action: string;
-  csrfToken: string;
-}) {
-  return (
-    <form method="post" action={action} enctype="multipart/form-data" class="space-y-6">
-      <input type="hidden" name="csrf_token" value={csrfToken} />
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '中文名称' : 'Chinese Name'} *</label>
-          <input type="text" name="name_zh" required value={provider?.name_zh || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '英文名称' : 'English Name'} *</label>
-          <input type="text" name="name_en" required value={provider?.name_en || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Slug</label>
-          <input type="text" name="slug" value={provider?.slug || ''} placeholder={lang === 'zh' ? '留空自动生成' : 'Leave empty to auto-generate'} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none font-mono text-sm" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('provider.website', lang)}</label>
-          <input type="url" name="website" value={provider?.website || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('provider.founded', lang)}</label>
-          <input type="text" name="founded_date" value={provider?.founded_date || ''} placeholder="YYYY-MM" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('provider.apply_method', lang)}</label>
-          <input type="text" name="apply_method" value={provider?.apply_method || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('provider.region', lang)}</label>
-          <input type="text" name="region" value={provider?.region || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('common.status', lang)}</label>
-          <select name="status" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">
-            <option value="active" selected={(!provider || provider.status === 'active')}>{t('common.active', lang)}</option>
-            <option value="inactive" selected={provider?.status === 'inactive'}>{t('common.inactive', lang)}</option>
-          </select>
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('provider.kyc', lang)}</label>
-          <select name="need_kyc" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">
-            <option value="0" selected={(!provider || !provider.need_kyc)}>{t('provider.kyc_no', lang)}</option>
-            <option value="1" selected={!!provider?.need_kyc}>{t('provider.kyc_yes', lang)}</option>
-          </select>
-        </div>
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '中文描述' : 'Chinese Description'}</label>
-        <textarea name="desc_zh" rows={3} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">{provider?.desc_zh || ''}</textarea>
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">{lang === 'zh' ? '英文描述' : 'English Description'}</label>
-        <textarea name="desc_en" rows={3} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">{provider?.desc_en || ''}</textarea>
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">{t('admin.upload_logo', lang)}</label>
-        <input type="file" name="logo" accept="image/*" class="w-full px-3 py-2 border border-gray-300 rounded-lg" />
-        {provider?.logo_url && <p class="text-xs text-gray-400 mt-1">{lang === 'zh' ? '当前Logo' : 'Current logo'}: {provider.logo_url}</p>}
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-2">{t('admin.manage_tags', lang)}</label>
-        <div class="flex flex-wrap gap-2">
-          {tags.map((tag) => (
-            <label class="flex items-center space-x-1 px-3 py-1.5 bg-gray-50 rounded-lg cursor-pointer hover:bg-brand-50">
-              <input type="checkbox" name="tags" value={String(tag.id)} checked={selectedTags.includes(tag.id)} class="rounded" />
-              <span class="text-sm">{tagName(tag, lang)}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-      <div class="flex space-x-4">
-        <button type="submit" class="px-6 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors">
-          {t('admin.save', lang)}
-        </button>
-        <a href="/admin" class="px-6 py-2.5 bg-gray-100 text-gray-600 rounded-lg font-medium hover:bg-gray-200 transition-colors">
-          {t('admin.cancel', lang)}
-        </a>
-      </div>
-    </form>
-  );
-}
-
-// New Provider
-app.get('/admin/provider/new', async (c) => {
-  const lang = getLang(getCookie(c, 'lang'));
-  const csrfToken = getCsrfToken(c);
-  const tags = await c.env.DB.prepare('SELECT * FROM vcc_tags ORDER BY category, id').all<Tag>();
-
-  return c.html(
-    <Layout title={t('admin.add_provider', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin/provider/new')} noIndex>
-      <div class="max-w-4xl mx-auto px-4 py-8">
-        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.add_provider', lang)}</h1>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <ProviderForm tags={tags.results} selectedTags={[]} lang={lang} action="/admin/provider/new" csrfToken={csrfToken} />
-        </div>
-      </div>
-    </Layout>
-  );
-});
-
-app.post('/admin/provider/new', async (c) => {
-  const db = c.env.DB;
-  const body = await c.req.parseBody();
-
-  // Handle logo upload
-  let logoUrl: string | null = null;
-  const logo = body['logo'];
-  if (logo && typeof logo === 'object' && 'arrayBuffer' in logo) {
-    const file = logo as { name: string; size: number; type: string; arrayBuffer(): Promise<ArrayBuffer> };
-    if (file.size > 0) {
-      const ext = file.name.split('.').pop() || 'png';
-      const key = `logos/${Date.now()}.${ext}`;
-      await c.env.R2.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type } });
-      logoUrl = key;
-    }
-  }
-
-  const slug = String(body['slug'] || '') || generateSlug(String(body['name_en'] || ''));
-
-  const result = await db.prepare(
-    'INSERT INTO vcc_providers (name_zh, name_en, website, founded_date, apply_method, desc_zh, desc_en, need_kyc, region, status, logo_url, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(
-    body['name_zh'], body['name_en'], body['website'] || null, body['founded_date'] || null,
-    body['apply_method'] || null, body['desc_zh'] || null, body['desc_en'] || null,
-    Number(body['need_kyc'] || 0), body['region'] || null, body['status'] || 'active', logoUrl, slug
-  ).run();
-
-  // Handle tags
-  const providerId = result.meta.last_row_id;
-  const tagIds = Array.isArray(body['tags']) ? body['tags'] : body['tags'] ? [body['tags']] : [];
-  for (const tagId of tagIds) {
-    await db.prepare('INSERT OR IGNORE INTO vcc_provider_tags (provider_id, tag_id) VALUES (?, ?)').bind(providerId, tagId).run();
-  }
-
-  return c.redirect('/admin');
-});
-
-// Edit Provider
-app.get('/admin/provider/:id/edit', async (c) => {
-  const lang = getLang(getCookie(c, 'lang'));
-  const db = c.env.DB;
-  const id = c.req.param('id');
-  const csrfToken = getCsrfToken(c);
-
-  const [provider, tags, selectedTagsResult] = await Promise.all([
-    db.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(id).first<Provider>(),
-    db.prepare('SELECT * FROM vcc_tags ORDER BY category, id').all<Tag>(),
-    db.prepare('SELECT tag_id FROM vcc_provider_tags WHERE provider_id = ?').bind(id).all<{ tag_id: number }>(),
-  ]);
-
-  if (!provider) return c.redirect('/admin');
-
-  const selectedTags = selectedTagsResult.results.map(r => r.tag_id);
-
-  return c.html(
-    <Layout title={t('admin.edit_provider', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, `/admin/provider/${id}/edit`)} noIndex>
-      <div class="max-w-4xl mx-auto px-4 py-8">
-        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.edit_provider', lang)}: {providerName(provider, lang)}</h1>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <ProviderForm provider={provider} tags={tags.results} selectedTags={selectedTags} lang={lang} action={`/admin/provider/${id}/edit`} csrfToken={csrfToken} />
-        </div>
-      </div>
-    </Layout>
-  );
-});
-
-app.post('/admin/provider/:id/edit', async (c) => {
-  const db = c.env.DB;
-  const id = c.req.param('id');
-  const body = await c.req.parseBody();
-
-  // Handle logo upload
-  let logoUpdate = '';
-  const logoParams: unknown[] = [];
-  const logo = body['logo'];
-  if (logo && typeof logo === 'object' && 'arrayBuffer' in logo) {
-    const file = logo as { name: string; size: number; type: string; arrayBuffer(): Promise<ArrayBuffer> };
-    if (file.size > 0) {
-      const ext = file.name.split('.').pop() || 'png';
-      const key = `logos/${Date.now()}.${ext}`;
-      await c.env.R2.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type } });
-      logoUpdate = ', logo_url = ?';
-      logoParams.push(key);
-    }
-  }
-
-  const slug = String(body['slug'] || '') || generateSlug(String(body['name_en'] || ''));
-
-  await db.prepare(
-    `UPDATE vcc_providers SET name_zh = ?, name_en = ?, website = ?, founded_date = ?, apply_method = ?, desc_zh = ?, desc_en = ?, need_kyc = ?, region = ?, status = ?, slug = ?, updated_at = datetime('now')${logoUpdate} WHERE id = ?`
-  ).bind(
-    body['name_zh'], body['name_en'], body['website'] || null, body['founded_date'] || null,
-    body['apply_method'] || null, body['desc_zh'] || null, body['desc_en'] || null,
-    Number(body['need_kyc'] || 0), body['region'] || null, body['status'] || 'active', slug,
-    ...logoParams, id
-  ).run();
-
-  // Update tags
-  await db.prepare('DELETE FROM vcc_provider_tags WHERE provider_id = ?').bind(id).run();
-  const tagIds = Array.isArray(body['tags']) ? body['tags'] : body['tags'] ? [body['tags']] : [];
-  for (const tagId of tagIds) {
-    await db.prepare('INSERT OR IGNORE INTO vcc_provider_tags (provider_id, tag_id) VALUES (?, ?)').bind(id, tagId).run();
-  }
-
-  return c.redirect('/admin');
-});
-
-// Delete Provider
-app.post('/admin/provider/:id/delete', async (c) => {
-  const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM vcc_providers WHERE id = ?').bind(id).run();
-  return c.redirect('/admin');
-});
-
-// ==========================================
-// Admin: Card CRUD
-// ==========================================
-
-function CardForm({ card, providers, lang, action, csrfToken }: {
-  card?: Card;
-  providers: Provider[];
-  lang: Lang;
-  action: string;
-  csrfToken: string;
-}) {
-  return (
-    <form method="post" action={action} class="space-y-6">
-      <input type="hidden" name="csrf_token" value={csrfToken} />
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.provider', lang)} *</label>
-          <select name="provider_id" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">
-            <option value="">{t('admin.select_provider', lang)}</option>
-            {providers.map((p) => (
-              <option value={String(p.id)} selected={card?.provider_id === p.id}>{providerName(p, lang)}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">BIN *</label>
-          <input type="text" name="bin" required value={card?.bin || ''} placeholder="e.g. 556150" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Slug</label>
-          <input type="text" name="slug" value={card?.slug || ''} placeholder={lang === 'zh' ? '留空自动生成' : 'Leave empty to auto-generate'} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none font-mono text-sm" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.type', lang)} *</label>
-          <select name="card_type" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">
-            <option value="Visa" selected={card?.card_type === 'Visa'}>Visa</option>
-            <option value="Mastercard" selected={card?.card_type === 'Mastercard'}>Mastercard</option>
-          </select>
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.currency', lang)}</label>
-          <input type="text" name="currency" value={card?.currency || 'USD'} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.issuance_fee', lang)} ($) *</label>
-          <input type="number" name="issuance_fee" required step="0.01" min="0" value={String(card?.issuance_fee ?? 0)} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.fee_rate', lang)} (%)</label>
-          <input type="number" name="fee_rate" step="0.01" min="0" value={String(card?.fee_rate ?? 0)} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.monthly_fee', lang)} ($)</label>
-          <input type="number" name="monthly_fee" step="0.01" min="0" value={String(card?.monthly_fee ?? 0)} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.initial_load', lang)} ($)</label>
-          <input type="number" name="initial_load" step="0.01" min="0" value={String(card?.initial_load ?? 0)} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.quota', lang)}</label>
-          <input type="text" name="quota" value={card?.quota || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">{t('card.usage', lang)}</label>
-          <input type="text" name="usage" value={card?.usage || ''} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" />
-        </div>
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">{t('provider.description', lang)}</label>
-        <textarea name="description" rows={3} class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">{card?.description || ''}</textarea>
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">{t('common.status', lang)}</label>
-        <select name="status" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none">
-          <option value="active" selected={(!card || card.status === 'active')}>{t('common.active', lang)}</option>
-          <option value="inactive" selected={card?.status === 'inactive'}>{t('common.inactive', lang)}</option>
-        </select>
-      </div>
-      <div class="flex space-x-4">
-        <button type="submit" class="px-6 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors">
-          {t('admin.save', lang)}
-        </button>
-        <a href="/admin" class="px-6 py-2.5 bg-gray-100 text-gray-600 rounded-lg font-medium hover:bg-gray-200 transition-colors">
-          {t('admin.cancel', lang)}
-        </a>
-      </div>
-    </form>
-  );
-}
-
-// New Card
-app.get('/admin/card/new', async (c) => {
-  const lang = getLang(getCookie(c, 'lang'));
-  const csrfToken = getCsrfToken(c);
-  const providers = await c.env.DB.prepare('SELECT * FROM vcc_providers ORDER BY name_en').all<Provider>();
-
-  return c.html(
-    <Layout title={t('admin.add_card', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, '/admin/card/new')} noIndex>
-      <div class="max-w-4xl mx-auto px-4 py-8">
-        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.add_card', lang)}</h1>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <CardForm providers={providers.results} lang={lang} action="/admin/card/new" csrfToken={csrfToken} />
-        </div>
-      </div>
-    </Layout>
-  );
-});
-
-app.post('/admin/card/new', async (c) => {
-  const db = c.env.DB;
-  const body = await c.req.parseBody();
-
-  // Auto-generate slug from provider slug + BIN if not provided
-  let slug = String(body['slug'] || '');
-  if (!slug) {
-    const provider = await db.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(body['provider_id']).first<{ slug: string }>();
-    slug = `${provider?.slug || 'card'}-${body['bin']}`;
-  }
-
-  await db.prepare(
-    'INSERT INTO vcc_cards (provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(
-    body['provider_id'], body['bin'], body['card_type'], body['currency'] || 'USD',
-    Number(body['issuance_fee'] || 0), Number(body['fee_rate'] || 0),
-    Number(body['monthly_fee'] || 0), Number(body['initial_load'] || 0),
-    body['quota'] || null, body['usage'] || null, body['description'] || null,
-    body['status'] || 'active', slug
-  ).run();
-
-  return c.redirect('/admin');
-});
-
-// Edit Card
-app.get('/admin/card/:id/edit', async (c) => {
-  const lang = getLang(getCookie(c, 'lang'));
-  const db = c.env.DB;
-  const id = c.req.param('id');
-  const csrfToken = getCsrfToken(c);
-
-  const [card, providers] = await Promise.all([
-    db.prepare('SELECT * FROM vcc_cards WHERE id = ?').bind(id).first<Card>(),
-    db.prepare('SELECT * FROM vcc_providers ORDER BY name_en').all<Provider>(),
-  ]);
-
-  if (!card) return c.redirect('/admin');
-
-  return c.html(
-    <Layout title={t('admin.edit_card', lang)} lang={lang} isAdmin={true} canonicalUrl={absoluteUrl(c, `/admin/card/${id}/edit`)} noIndex>
-      <div class="max-w-4xl mx-auto px-4 py-8">
-        <h1 class="text-2xl font-bold text-gray-900 mb-6">{t('admin.edit_card', lang)}</h1>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <CardForm card={card} providers={providers.results} lang={lang} action={`/admin/card/${id}/edit`} csrfToken={csrfToken} />
-        </div>
-      </div>
-    </Layout>
-  );
-});
-
-app.post('/admin/card/:id/edit', async (c) => {
-  const db = c.env.DB;
-  const id = c.req.param('id');
-  const body = await c.req.parseBody();
-
-  // Auto-generate slug from provider slug + BIN if not provided
-  let slug = String(body['slug'] || '');
-  if (!slug) {
-    const provider = await db.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(body['provider_id']).first<{ slug: string }>();
-    slug = `${provider?.slug || 'card'}-${body['bin']}`;
-  }
-
-  await db.prepare(
-    'UPDATE vcc_cards SET provider_id = ?, bin = ?, card_type = ?, currency = ?, issuance_fee = ?, fee_rate = ?, monthly_fee = ?, initial_load = ?, quota = ?, usage = ?, description = ?, status = ?, slug = ? WHERE id = ?'
-  ).bind(
-    body['provider_id'], body['bin'], body['card_type'], body['currency'] || 'USD',
-    Number(body['issuance_fee'] || 0), Number(body['fee_rate'] || 0),
-    Number(body['monthly_fee'] || 0), Number(body['initial_load'] || 0),
-    body['quota'] || null, body['usage'] || null, body['description'] || null,
-    body['status'] || 'active', slug, id
-  ).run();
-
-  return c.redirect('/admin');
-});
-
-// Delete Card
-app.post('/admin/card/:id/delete', async (c) => {
-  const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM vcc_cards WHERE id = ?').bind(id).run();
-  return c.redirect('/admin');
-});
-
 // ==========================================
 // Export
 // ==========================================
+export { app };
 export default app;

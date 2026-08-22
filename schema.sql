@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS vcc_cards (
   usage TEXT,
   description TEXT,
   status TEXT DEFAULT 'active',
+  is_featured INTEGER NOT NULL DEFAULT 0,
   slug TEXT NOT NULL UNIQUE,
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (provider_id) REFERENCES vcc_providers(id) ON DELETE CASCADE
@@ -58,14 +59,6 @@ CREATE TABLE IF NOT EXISTS vcc_provider_tags (
   FOREIGN KEY (tag_id) REFERENCES vcc_tags(id) ON DELETE CASCADE
 );
 
--- 管理员表
-CREATE TABLE IF NOT EXISTS admin_users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
 -- 内容发布表 (Articles / Knowledge Base)
 CREATE TABLE IF NOT EXISTS content_posts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,12 +70,19 @@ CREATE TABLE IF NOT EXISTS content_posts (
   body_zh TEXT NOT NULL,
   body_en TEXT NOT NULL,
   status TEXT DEFAULT 'draft', -- draft / published
+  is_featured INTEGER NOT NULL DEFAULT 0,
+  featured_image_url TEXT,
   published_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_content_posts_status_published ON content_posts(status, published_at);
+CREATE INDEX IF NOT EXISTS idx_providers_status_updated ON vcc_providers(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_cards_provider_status ON vcc_cards(provider_id, status);
+CREATE INDEX IF NOT EXISTS idx_cards_featured_status ON vcc_cards(is_featured, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_provider_tags_tag ON vcc_provider_tags(tag_id, provider_id);
+CREATE INDEX IF NOT EXISTS idx_content_featured_published ON content_posts(is_featured, status, published_at);
 
 -- ============================================
 -- Seed Data: Tags
@@ -108,24 +108,15 @@ INSERT OR IGNORE INTO vcc_providers (id, name_zh, name_en, website, founded_date
   (3, 'OneKey Card', 'OneKey Card', 'https://card.onekey.so', '2023-01', '官网注册 / Website Registration', '硬件钱包品牌推出的虚拟卡服务，安全性高。', 'Virtual card service by hardware wallet brand, high security.', 1, 'Global', 'active', 'onekey-card');
 
 -- Seed Data: Sample Cards (BINs)
-INSERT OR IGNORE INTO vcc_cards (id, provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status, slug) VALUES
-  (1, 1, '556150', 'Mastercard', 'USD', 10.00, 1.5, 0.00, 20.00, '单笔$5000', '电商/广告/订阅', 'FomePay经典卡段', 'active', 'fomepay-556150'),
-  (2, 1, '404038', 'Visa', 'USD', 15.00, 2.0, 1.00, 50.00, '单笔$10000', '全场景', 'FomePay高额卡段', 'active', 'fomepay-404038'),
-  (3, 2, '531993', 'Mastercard', 'USD', 0.00, 1.2, 1.00, 5.00, '单笔$3000', '日常消费', 'DuPay标准卡', 'active', 'dupay-531993'),
-  (4, 2, '559666', 'Mastercard', 'USD', 10.00, 0.8, 2.00, 100.00, '单笔$50000', '大额消费', 'DuPay高级卡', 'active', 'dupay-559666'),
-  (5, 3, '556766', 'Visa', 'USD', 2.00, 1.0, 0.00, 10.00, '单笔$5000', '线上消费', 'OneKey基础卡', 'active', 'onekey-card-556766');
+INSERT OR IGNORE INTO vcc_cards (id, provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status, is_featured, slug) VALUES
+  (1, 1, '556150', 'Mastercard', 'USD', 10.00, 1.5, 0.00, 20.00, '单笔$5000', '电商/广告/订阅', 'FomePay经典卡段', 'active', 1, 'fomepay-556150'),
+  (2, 1, '404038', 'Visa', 'USD', 15.00, 2.0, 1.00, 50.00, '单笔$10000', '全场景', 'FomePay高额卡段', 'active', 0, 'fomepay-404038'),
+  (3, 2, '531993', 'Mastercard', 'USD', 0.00, 1.2, 1.00, 5.00, '单笔$3000', '日常消费', 'DuPay标准卡', 'active', 1, 'dupay-531993'),
+  (4, 2, '559666', 'Mastercard', 'USD', 10.00, 0.8, 2.00, 100.00, '单笔$50000', '大额消费', 'DuPay高级卡', 'active', 0, 'dupay-559666'),
+  (5, 3, '556766', 'Visa', 'USD', 2.00, 1.0, 0.00, 10.00, '单笔$5000', '线上消费', 'OneKey基础卡', 'active', 1, 'onekey-card-556766');
 
 -- Seed Data: Provider-Tag Associations
 INSERT OR IGNORE INTO vcc_provider_tags (provider_id, tag_id) VALUES
   (1, 1), (1, 3), (1, 6), (1, 8),
   (2, 1), (2, 4), (2, 5), (2, 9),
   (3, 1), (3, 4), (3, 6);
-
--- ============================================
--- Initial Admin User
--- Password: admin123 (SHA-256 hash)
--- IMPORTANT: Change this password after first login!
--- To generate a new hash: echo -n "yourpassword" | sha256sum
--- ============================================
-INSERT OR IGNORE INTO admin_users (id, username, password_hash) VALUES
-  (1, 'admin', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9');

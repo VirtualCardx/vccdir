@@ -1,25 +1,32 @@
 import type { Child } from 'hono/jsx';
 import type { Lang } from './types';
 import { t } from './i18n';
+import styles from './styles.css';
 
 interface LayoutProps {
   title: string;
   description?: string;
   lang: Lang;
-  isAdmin?: boolean;
   canonicalUrl?: string;
   noIndex?: boolean;
+  followWhenNoIndex?: boolean;
   ogType?: string;
+  ogImage?: string;
+  prevUrl?: string;
+  nextUrl?: string;
   jsonLd?: Record<string, unknown> | Record<string, unknown>[];
   children: Child;
 }
 
-export function Layout({ title, description, lang, isAdmin, canonicalUrl, noIndex, ogType, jsonLd, children }: LayoutProps) {
+export function Layout({ title, description, lang, canonicalUrl, noIndex, followWhenNoIndex, ogType, ogImage, prevUrl, nextUrl, jsonLd, children }: LayoutProps) {
   const desc = description || t('site.description', lang);
   const switchLang = lang === 'zh' ? 'en' : 'zh';
   const switchUrl = `/lang/${switchLang}`;
   const canonical = canonicalUrl || '/';
   const fullTitle = `${title} | ${t('site.title', lang)}`;
+  const serializedJsonLd = jsonLd
+    ? JSON.stringify(jsonLd).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')
+    : '';
 
   return (
     <html lang={lang === 'zh' ? 'zh-CN' : 'en'}>
@@ -28,74 +35,60 @@ export function Layout({ title, description, lang, isAdmin, canonicalUrl, noInde
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>{fullTitle}</title>
         <meta name="description" content={desc} />
-        <meta name="robots" content={noIndex ? 'noindex, nofollow' : 'index, follow, max-image-preview:large'} />
+        <meta name="robots" content={noIndex ? `noindex, ${followWhenNoIndex ? 'follow' : 'nofollow'}` : 'index, follow, max-image-preview:large'} />
         <meta property="og:title" content={fullTitle} />
         <meta property="og:description" content={desc} />
         <meta property="og:type" content={ogType || 'website'} />
         <meta property="og:url" content={canonical} />
         <meta property="og:site_name" content={t('site.title', lang)} />
-        <meta name="twitter:card" content="summary" />
+        {ogImage && <meta property="og:image" content={ogImage} />}
+        <meta name="twitter:card" content={ogImage ? 'summary_large_image' : 'summary'} />
         <meta name="twitter:title" content={fullTitle} />
         <meta name="twitter:description" content={desc} />
+        {ogImage && <meta name="twitter:image" content={ogImage} />}
         <link rel="canonical" href={canonical} />
-        <script src="https://cdn.tailwindcss.com"></script>
-        <script dangerouslySetInnerHTML={{
-          __html: `tailwind.config = {
-            theme: {
-              extend: {
-                colors: {
-                  brand: { 50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd', 400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8', 800: '#1e40af', 900: '#1e3a8a' }
-                }
-              }
-            }
-          }`
-        }} />
+        {prevUrl && <link rel="prev" href={prevUrl} />}
+        {nextUrl && <link rel="next" href={nextUrl} />}
         {jsonLd && (
-          <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+          <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: serializedJsonLd }} />
         )}
         <style dangerouslySetInnerHTML={{
-          __html: `
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-            .card-hover { transition: all 0.2s ease; }
-            .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); }
+          __html: `${styles}
+            .card-hover { transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease; }
+            .card-hover:hover { transform: translateY(-4px); border-color: rgba(99,102,241,.22); box-shadow: 0 24px 55px -24px rgba(79,70,229,.28); }
             .tag-pill { transition: all 0.15s ease; }
             .tag-pill:hover { transform: scale(1.05); }
             .content-prose > * + * { margin-top: 1rem; }
-            .content-prose h2 { font-size: 1.375rem; line-height: 1.3; font-weight: 700; color: #111827; margin-top: 1.75rem; }
-            .content-prose h3 { font-size: 1.125rem; line-height: 1.4; font-weight: 700; color: #111827; margin-top: 1.5rem; }
+            .content-prose h2 { font-size: 1.5rem; line-height: 1.3; font-weight: 750; color: #0f172a; margin-top: 2.25rem; letter-spacing: -.02em; }
+            .content-prose h3 { font-size: 1.2rem; line-height: 1.4; font-weight: 700; color: #0f172a; margin-top: 1.75rem; }
             .content-prose ul, .content-prose ol { padding-left: 1.5rem; }
             .content-prose ul { list-style: disc; }
             .content-prose ol { list-style: decimal; }
-            .content-prose blockquote { border-left: 3px solid #93c5fd; padding-left: 1rem; color: #4b5563; background: #eff6ff; border-radius: 0 0.5rem 0.5rem 0; padding-top: 0.75rem; padding-bottom: 0.75rem; }
-            .content-prose a { color: #2563eb; text-decoration: underline; }
+            .content-prose blockquote { border-left: 3px solid #818cf8; padding: 1rem 1.25rem; color: #475569; background: #eef2ff; border-radius: 0 1rem 1rem 0; }
+            .content-prose a { color: #4f46e5; text-decoration: underline; text-underline-offset: 3px; }
             .rich-editor:empty:before { content: attr(data-placeholder); color: #9ca3af; }
             .rich-editor:focus { outline: none; box-shadow: 0 0 0 2px #3b82f6; border-color: transparent; }
           `
         }} />
       </head>
-      <body class="bg-gray-50 min-h-screen flex flex-col">
+      <body class="min-h-screen flex flex-col">
         {/* Navigation */}
-        <nav class="bg-white border-b border-gray-200 sticky top-0 z-50">
-          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between h-16 items-center">
-              <a href="/" class="flex items-center space-x-2">
-                <span class="text-2xl font-bold text-brand-600">VCC</span>
-                <span class="text-gray-500 text-sm hidden sm:inline">{t('site.title', lang)}</span>
+        <nav class="sticky top-0 z-50 border-b border-slate-200/60 bg-white/80 shadow-[0_1px_0_rgba(15,23,42,.02)] backdrop-blur-xl">
+          <div class="page-shell">
+            <div class="flex h-[4.5rem] items-center justify-between gap-4">
+              <a href="/" class="group flex min-w-0 items-center gap-3" aria-label={t('site.title', lang)}>
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-sm font-black tracking-tight text-white shadow-lg shadow-brand-600/20 transition-transform group-hover:rotate-3">VC</span>
+                <span class="hidden min-w-0 sm:block"><span class="block truncate text-sm font-bold tracking-tight text-slate-950">VCC Directory</span><span class="block truncate text-[11px] text-slate-400">Virtual card intelligence</span></span>
               </a>
-              <div class="flex items-center space-x-4">
-                <a href="/" class="text-gray-600 hover:text-brand-600 text-sm font-medium">{t('nav.home', lang)}</a>
-                <a href="/content" class="text-gray-600 hover:text-brand-600 text-sm font-medium">{t('nav.content', lang)}</a>
-                {isAdmin ? (
-                  <>
-                    <a href="/admin" class="text-gray-600 hover:text-brand-600 text-sm font-medium">{t('nav.admin', lang)}</a>
-                    <a href="/logout" class="text-red-500 hover:text-red-700 text-sm font-medium">{t('nav.logout', lang)}</a>
-                  </>
-                ) : (
-                  <a href="/login" class="text-gray-600 hover:text-brand-600 text-sm font-medium">{t('nav.login', lang)}</a>
-                )}
+              <div class="flex items-center gap-1.5">
+                <div class="flex items-center rounded-2xl border border-slate-200/70 bg-slate-50/80 p-1">
+                  <a href="/" class="hidden rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:block">{t('nav.home', lang)}</a>
+                  <a href="/cards" class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.cards', lang)}</a>
+                  <a href="/content" class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.content', lang)}</a>
+                </div>
                 <a
                   href={switchUrl}
-                  class="px-3 py-1.5 bg-brand-50 text-brand-600 rounded-full text-sm font-medium hover:bg-brand-100 transition-colors"
+                  class="rounded-xl border border-brand-100 bg-brand-50 px-2.5 py-2.5 text-xs font-bold text-brand-700 hover:border-brand-200 hover:bg-brand-100 sm:px-3 sm:text-sm"
                 >
                   {t('nav.language', lang)}
                 </a>
@@ -110,10 +103,14 @@ export function Layout({ title, description, lang, isAdmin, canonicalUrl, noInde
         </main>
 
         {/* Footer */}
-        <footer class="bg-white border-t border-gray-200 mt-12">
-          <div class="max-w-7xl mx-auto px-4 py-8 text-center text-gray-400 text-sm">
-            <p>{t('footer.text', lang)}</p>
-            <p class="mt-2">&copy; {new Date().getFullYear()} VCC Directory</p>
+        <footer class="mt-16 overflow-hidden border-t border-slate-800 bg-slate-950 text-slate-300">
+          <div class="page-shell relative py-12">
+            <div class="absolute -right-24 -top-28 h-72 w-72 rounded-full bg-brand-600/10 blur-3xl"></div>
+            <div class="relative flex flex-col gap-10 sm:flex-row sm:items-end sm:justify-between">
+              <div class="max-w-lg"><div class="mb-4 flex items-center gap-3"><span class="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-accent-500 text-xs font-black text-white shadow-lg shadow-brand-950/30">VC</span><div><span class="block font-bold text-white">VCC Directory</span><span class="block text-xs text-slate-500">Virtual card intelligence</span></div></div><p class="text-sm leading-6 text-slate-400">{t('footer.text', lang)}</p></div>
+              <div class="flex flex-wrap gap-x-7 gap-y-3 text-sm font-semibold"><a href="/" class="hover:text-white">{t('nav.home', lang)}</a><a href="/cards" class="hover:text-white">{t('nav.cards', lang)}</a><a href="/content" class="hover:text-white">{t('nav.content', lang)}</a><a href={switchUrl} class="hover:text-white">{t('nav.language', lang)}</a></div>
+            </div>
+            <div class="mt-8 border-t border-slate-800 pt-6 text-xs text-slate-500">&copy; {new Date().getFullYear()} VCC Directory</div>
           </div>
         </footer>
       </body>

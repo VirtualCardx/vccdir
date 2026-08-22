@@ -1,5 +1,7 @@
 export type Lang = 'zh' | 'en';
 
+export type Env = { Bindings: CloudflareBindings };
+
 export interface Provider {
   id: number;
   name_zh: string;

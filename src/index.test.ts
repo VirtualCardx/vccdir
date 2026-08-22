@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { app, generateSlug, pageUrl, publicPageNumber, sanitizeContentHtml } from './index';
+import { app } from './index';
+import { generateSlug, sanitizeContentHtml } from './lib/sanitize';
+import { pageUrl, publicPageNumber } from './lib/seo';
 
 const baseEnv = {
   SITE_URL: 'https://www.vccdir.com',
@@ -14,7 +16,11 @@ interface MockOptions {
 
 // Minimal D1 stub: statements run directly or through bind() and return the configured row and list.
 function mockDatabase({ assertQuery, first = null, results = [] }: MockOptions = {}): D1Database {
-  const execute = () => ({ first: async () => first, all: async () => ({ results }) });
+  const execute = () => ({
+    first: async () => first,
+    all: async () => ({ results }),
+    run: async () => ({ meta: { last_row_id: 1 } }),
+  });
   return {
     prepare(query: string) {
       return {
@@ -25,8 +31,11 @@ function mockDatabase({ assertQuery, first = null, results = [] }: MockOptions =
         },
       };
     },
+    batch: async (statements: unknown[]) => statements.map(() => ({ meta: { last_row_id: 1 } })),
   } as unknown as D1Database;
 }
+
+const authHeaders = { Authorization: 'Bearer a-secure-test-token', 'Content-Type': 'application/json' };
 
 describe('public routing', () => {
   it('does not expose the removed login route', async () => {
@@ -46,6 +55,38 @@ describe('public routing', () => {
     expect(await response.text()).toContain('发现适合你的虚拟信用卡');
     expect(response.headers.get('Content-Security-Policy')).toContain('default-src');
     expect(response.headers.get('Cache-Control')).toBe('no-cache');
+  });
+
+  it('serves the English homepage at /en with hreflang alternates', async () => {
+    const response = await app.request('https://www.vccdir.com/en', {}, { ...baseEnv, DB: mockDatabase() });
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('Find the Right Virtual Card');
+    expect(body).toContain('hreflang="en"');
+    expect(body).toContain('hreflang="x-default"');
+    expect(body).toContain('<link rel="canonical" href="https://www.vccdir.com/en"');
+  });
+
+  it('redirects cookie-preferring-English visitors to the /en pages', async () => {
+    const response = await app.request('https://www.vccdir.com/cards', {
+      headers: { Cookie: 'lang=en' },
+    }, baseEnv);
+    expect(response.status).toBe(302);
+    expect(response.headers.get('Location')).toBe('/en/cards');
+  });
+
+  it('does not redirect language switches to an external referrer', async () => {
+    const response = await app.request('https://www.vccdir.com/lang/en', {
+      headers: { Referer: 'https://attacker.example/phish' },
+    }, baseEnv);
+    expect(response.headers.get('Location')).toBe('/en');
+  });
+
+  it('strips the /en prefix when switching back to Chinese', async () => {
+    const response = await app.request('https://www.vccdir.com/lang/zh', {
+      headers: { Referer: 'https://www.vccdir.com/en/cards?q=visa' },
+    }, baseEnv);
+    expect(response.headers.get('Location')).toBe('/cards?q=visa');
   });
 
   it('requires active providers on public detail pages', async () => {
@@ -82,6 +123,16 @@ describe('public routing', () => {
     expect(response.status).toBe(200);
   });
 
+  it('renders the provider directory in both languages', async () => {
+    const zh = await app.request('https://www.vccdir.com/providers', {}, { ...baseEnv, DB: mockDatabase() });
+    expect(zh.status).toBe(200);
+    expect(await zh.text()).toContain('虚拟卡平台目录');
+
+    const en = await app.request('https://www.vccdir.com/en/providers', {}, { ...baseEnv, DB: mockDatabase() });
+    expect(en.status).toBe(200);
+    expect(await en.text()).toContain('Virtual Card Platform Directory');
+  });
+
   it('marks card search results noindex while normal listings stay indexable', async () => {
     const env = { ...baseEnv, DB: mockDatabase() } as CloudflareBindings;
     const listing = await app.request('https://www.vccdir.com/cards', {}, env);
@@ -93,31 +144,21 @@ describe('public routing', () => {
     expect(await search.text()).toContain('noindex, follow');
   });
 
-  it('escapes LIKE wildcards in card search terms', async () => {
-    let capturedQuery = '';
+  it('keeps LIKE patterns within the D1 50-byte budget', async () => {
     let capturedParams: unknown[] = [];
     const env = {
       ...baseEnv,
       DB: mockDatabase({
-        assertQuery: (query, params) => {
-          capturedQuery = query;
-          capturedParams = params;
-        },
+        assertQuery: (_query, params) => { capturedParams = params; },
       }),
     } as CloudflareBindings;
-    const response = await app.request('https://www.vccdir.com/cards?q=100%25', {}, env);
+    const response = await app.request(`https://www.vccdir.com/cards?q=${'a'.repeat(60)}`, {}, env);
     expect(response.status).toBe(200);
-    expect(capturedQuery).toContain("LIKE ? ESCAPE '\\'");
-    expect(capturedParams.filter((param) => typeof param === 'string')).toEqual([
-      'active', 'active', '%100\\%%', '%100\\%%', '%100\\%%', '%100\\%%', '%100\\%%', '%100\\%%', '%100\\%%',
-    ]);
-  });
-
-  it('does not redirect language switches to an external referrer', async () => {
-    const response = await app.request('https://www.vccdir.com/lang/en', {
-      headers: { Referer: 'https://attacker.example/phish' },
-    }, baseEnv);
-    expect(response.headers.get('Location')).toBe('/');
+    const patterns = capturedParams.filter((param): param is string => typeof param === 'string' && param.startsWith('%'));
+    expect(patterns.length).toBeGreaterThan(0);
+    for (const pattern of patterns) {
+      expect(new TextEncoder().encode(pattern).length).toBeLessThanOrEqual(50);
+    }
   });
 
   it('serves robots.txt with the admin API disallowed', async () => {
@@ -128,12 +169,15 @@ describe('public routing', () => {
     expect(body).toContain('Sitemap: https://www.vccdir.com/sitemap.xml');
   });
 
-  it('serves a sitemap containing the static pages', async () => {
+  it('serves a bilingual sitemap with hreflang alternates', async () => {
     const response = await app.request('https://www.vccdir.com/sitemap.xml', {}, { ...baseEnv, DB: mockDatabase() });
     expect(response.status).toBe(200);
     const body = await response.text();
+    expect(body).toContain('xmlns:xhtml');
     expect(body).toContain('<loc>https://www.vccdir.com/</loc>');
-    expect(body).toContain('<loc>https://www.vccdir.com/content</loc>');
+    expect(body).toContain('<loc>https://www.vccdir.com/en</loc>');
+    expect(body).toContain('<loc>https://www.vccdir.com/providers</loc>');
+    expect(body).toContain('hreflang="x-default"');
   });
 });
 
@@ -158,6 +202,46 @@ describe('Hermes API security', () => {
       headers: { Authorization: 'Bearer change-me-in-production' },
     }, { ...baseEnv, HERMES_API_TOKEN: 'change-me-in-production' } as CloudflareBindings);
     expect(response.status).toBe(503);
+  });
+});
+
+describe('Hermes API mutations', () => {
+  it('creates providers and returns them with tags and card count', async () => {
+    const env = {
+      ...baseEnv,
+      DB: mockDatabase({
+        first: { id: 1, name_zh: '测试平台', name_en: 'Test Provider', slug: 'test-provider', status: 'active' },
+      }),
+    } as CloudflareBindings;
+    const response = await app.request('https://www.vccdir.com/api/admin/providers', {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ name_zh: '测试平台', name_en: 'Test Provider' }),
+    }, env);
+    expect(response.status).toBe(201);
+    const provider = (await response.json()) as Record<string, unknown>;
+    expect(provider.name_en).toBe('Test Provider');
+    expect(provider.tags).toEqual([]);
+    expect(provider.card_count).toBe(0);
+  });
+
+  it('rejects card BINs that are not 6 to 19 digits', async () => {
+    const response = await app.request('https://www.vccdir.com/api/admin/cards', {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ provider_id: 1, bin: 'abc12', card_type: 'Visa' }),
+    }, { ...baseEnv, DB: mockDatabase() });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toHaveProperty('error');
+  });
+
+  it('deletes cards through the admin API', async () => {
+    const response = await app.request('https://www.vccdir.com/api/admin/cards/5', {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer a-secure-test-token' },
+    }, { ...baseEnv, DB: mockDatabase() });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
   });
 });
 

@@ -1,6 +1,6 @@
 import type { Child } from 'hono/jsx';
 import type { Lang } from './types';
-import { t } from './i18n';
+import { t, langPath } from './i18n';
 import styles from './styles.css';
 
 interface LayoutProps {
@@ -8,6 +8,7 @@ interface LayoutProps {
   description?: string;
   lang: Lang;
   canonicalUrl?: string;
+  alternates?: { zh: string; en: string };
   noIndex?: boolean;
   followWhenNoIndex?: boolean;
   ogType?: string;
@@ -18,7 +19,7 @@ interface LayoutProps {
   children: Child;
 }
 
-export function Layout({ title, description, lang, canonicalUrl, noIndex, followWhenNoIndex, ogType, ogImage, prevUrl, nextUrl, jsonLd, children }: LayoutProps) {
+export function Layout({ title, description, lang, canonicalUrl, alternates, noIndex, followWhenNoIndex, ogType, ogImage, prevUrl, nextUrl, jsonLd, children }: LayoutProps) {
   const desc = description || t('site.description', lang);
   const switchLang = lang === 'zh' ? 'en' : 'zh';
   const switchUrl = `/lang/${switchLang}`;
@@ -49,6 +50,13 @@ export function Layout({ title, description, lang, canonicalUrl, noIndex, follow
         <meta name="twitter:description" content={desc} />
         {ogImage && <meta name="twitter:image" content={ogImage} />}
         <link rel="canonical" href={canonical} />
+        {alternates && (
+          <>
+            <link rel="alternate" hreflang="zh-CN" href={alternates.zh} />
+            <link rel="alternate" hreflang="en" href={alternates.en} />
+            <link rel="alternate" hreflang="x-default" href={alternates.zh} />
+          </>
+        )}
         {prevUrl && <link rel="prev" href={prevUrl} />}
         {nextUrl && <link rel="next" href={nextUrl} />}
         {jsonLd && (
@@ -74,15 +82,16 @@ export function Layout({ title, description, lang, canonicalUrl, noIndex, follow
         <nav class="sticky top-0 z-50 border-b border-slate-200/60 bg-white/80 shadow-[0_1px_0_rgba(15,23,42,.02)] backdrop-blur-xl">
           <div class="page-shell">
             <div class="flex h-[4.5rem] items-center justify-between gap-4">
-              <a href="/" class="group flex min-w-0 items-center gap-3" aria-label={t('site.title', lang)}>
+              <a href={langPath(lang, '/')} class="group flex min-w-0 items-center gap-3" aria-label={t('site.title', lang)}>
                 <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-sm font-black tracking-tight text-white shadow-lg shadow-brand-600/20 transition-transform group-hover:rotate-3">VC</span>
                 <span class="hidden min-w-0 sm:block"><span class="block truncate text-sm font-bold tracking-tight text-slate-950">VCC Directory</span><span class="block truncate text-[11px] text-slate-400">Virtual card intelligence</span></span>
               </a>
               <div class="flex items-center gap-1.5">
                 <div class="flex items-center rounded-2xl border border-slate-200/70 bg-slate-50/80 p-1">
-                  <a href="/" class="hidden rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:block">{t('nav.home', lang)}</a>
-                  <a href="/cards" class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.cards', lang)}</a>
-                  <a href="/content" class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.content', lang)}</a>
+                  <a href={langPath(lang, '/')} class="hidden rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:block">{t('nav.home', lang)}</a>
+                  <a href={langPath(lang, '/providers')} class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.providers', lang)}</a>
+                  <a href={langPath(lang, '/cards')} class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.cards', lang)}</a>
+                  <a href={langPath(lang, '/content')} class="rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm sm:px-3 sm:text-sm">{t('nav.content', lang)}</a>
                 </div>
                 <a
                   href={switchUrl}
@@ -106,7 +115,7 @@ export function Layout({ title, description, lang, canonicalUrl, noIndex, follow
             <div class="absolute -right-24 -top-28 h-72 w-72 rounded-full bg-brand-600/10 blur-3xl"></div>
             <div class="relative flex flex-col gap-10 sm:flex-row sm:items-end sm:justify-between">
               <div class="max-w-lg"><div class="mb-4 flex items-center gap-3"><span class="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-accent-500 text-xs font-black text-white shadow-lg shadow-brand-950/30">VC</span><div><span class="block font-bold text-white">VCC Directory</span><span class="block text-xs text-slate-500">Virtual card intelligence</span></div></div><p class="text-sm leading-6 text-slate-400">{t('footer.text', lang)}</p></div>
-              <div class="flex flex-wrap gap-x-7 gap-y-3 text-sm font-semibold"><a href="/" class="hover:text-white">{t('nav.home', lang)}</a><a href="/cards" class="hover:text-white">{t('nav.cards', lang)}</a><a href="/content" class="hover:text-white">{t('nav.content', lang)}</a><a href={switchUrl} class="hover:text-white">{t('nav.language', lang)}</a></div>
+              <div class="flex flex-wrap gap-x-7 gap-y-3 text-sm font-semibold"><a href={langPath(lang, '/')} class="hover:text-white">{t('nav.home', lang)}</a><a href={langPath(lang, '/providers')} class="hover:text-white">{t('nav.providers', lang)}</a><a href={langPath(lang, '/cards')} class="hover:text-white">{t('nav.cards', lang)}</a><a href={langPath(lang, '/content')} class="hover:text-white">{t('nav.content', lang)}</a><a href={switchUrl} class="hover:text-white">{t('nav.language', lang)}</a></div>
             </div>
             <div class="mt-8 border-t border-slate-800 pt-6 text-xs text-slate-500">&copy; {new Date().getFullYear()} VCC Directory</div>
           </div>

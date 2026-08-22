@@ -14,9 +14,13 @@
 ## 项目结构
 
 ```text
-src/index.tsx       Worker、公开路由和 Hermes API
+src/index.tsx       Worker 入口：中间件、语言路由、sitemap 和装配
+src/pages.tsx       公开页面处理器（中文与 /en 英文）
+src/admin.ts        Hermes 管理 API，挂载于 /api/admin
+src/components.tsx  分页、卡片与文章列表组件
 src/layout.tsx      HTML 布局、SEO 和页面样式
-src/i18n.ts         中英文翻译
+src/lib/            净化、API 校验、SEO 与 D1 工具
+src/i18n.ts         中英文翻译与 URL 语言辅助
 src/types.ts        数据类型
 schema.sql          新数据库结构和示例数据
 migrations/         现有数据库迁移
@@ -74,7 +78,8 @@ npm run db:migrate:remote
 公开路由：
 
 - `GET /`
-- `GET /cards`：虚拟信用卡目录，支持 `q` 搜索和 `page` 分页
+- `GET /providers`：虚拟卡平台目录，支持 `q` 搜索和 `page` 分页
+- `GET /cards`：虚拟信用卡卡段目录，支持 `q` 搜索和 `page` 分页
 - `GET /provider/:slug`
 - `GET /card/:slug`
 - `GET /content`
@@ -83,6 +88,12 @@ npm run db:migrate:remote
 - `GET /sitemap.xml`
 - `GET /robots.txt`
 - `GET /lang/:lang`
+
+平台与卡段是父子关系：`/providers` 按平台浏览（地区、KYC、标签、卡段数量等平台级信息），平台详情页列出该平台全部卡段，`/cards` 按卡头（BIN）横向浏览和比较所有卡段。首页同时提供"虚拟卡平台"和"虚拟信用卡"两个栏目。
+
+搜索词会按字节预算截断，保证 SQL LIKE 模式不超过 D1 的 50 字节上限。
+
+语言由 URL 决定：无前缀路径为中文，`/en/*` 为英文。所有可索引页面输出 `hreflang` 备选链接（`zh-CN`、`en`、`x-default`），sitemap 同时列出两种语言版本。`lang` cookie 为 `en` 的访问者会被 302 跳转到 `/en` 页面；不带 cookie 的爬虫始终看到默认中文 URL，已有索引数据不受影响。
 
 停用的平台和卡段不会通过详情 URL 公开访问；草稿文章也不会公开。
 

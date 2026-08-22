@@ -14,9 +14,13 @@ Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
 ## Structure
 
 ```text
-src/index.tsx       Worker, public routes, and Hermes API
+src/index.tsx       Worker entry: middleware, language routing, sitemap, wiring
+src/pages.tsx       Public page handlers (Chinese and /en English)
+src/admin.ts        Hermes admin API, mounted at /api/admin
+src/components.tsx  Pagination, card, and article tiles
 src/layout.tsx      HTML layout, SEO, and page styles
-src/i18n.ts         Chinese and English translations
+src/lib/            sanitize, api validation, seo helpers, and D1 utilities
+src/i18n.ts         Chinese and English translations and URL language helpers
 src/types.ts        Data types
 schema.sql          Fresh database schema and sample data
 migrations/         Existing database migrations
@@ -71,7 +75,11 @@ The migration removes the obsolete `admin_users` table and adds common query ind
 
 ## Routes
 
-Public routes include `/`, `/cards`, `/provider/:slug`, `/card/:slug`, `/content`, `/content/:slug`, `/images/*`, `/sitemap.xml`, `/robots.txt`, and `/lang/:lang`. `/cards` supports `q` search and `page` pagination.
+Public routes include `/`, `/providers`, `/cards`, `/provider/:slug`, `/card/:slug`, `/content`, `/content/:slug`, `/images/*`, `/sitemap.xml`, `/robots.txt`, and `/lang/:lang`. Both directories support `q` search and `page` pagination. Search terms are truncated to keep SQL LIKE patterns within D1's 50-byte limit.
+
+Platforms and card BINs form a parent-child hierarchy: `/providers` browses by platform (region, KYC, tags, and BIN counts), each platform page lists all of its card BINs, and `/cards` browses and compares individual BINs across every platform. The homepage offers both a platforms section and a virtual cards section.
+
+Language lives in the URL: unprefixed paths serve Chinese and `/en/*` serves English. Every indexed page emits `hreflang` alternates (`zh-CN`, `en`, and `x-default`) and the sitemap lists both language versions. Visitors whose `lang` cookie is `en` are redirected (302) to the `/en` page; crawlers without cookies always see the default Chinese URLs, so existing indexed URLs are unchanged.
 
 Inactive providers and cards are unavailable through public detail URLs. Draft posts are also private.
 

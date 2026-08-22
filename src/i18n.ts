@@ -7,6 +7,7 @@ const translations = {
 
   // Navigation
   'nav.home': { zh: '首页', en: 'Home' },
+  'nav.providers': { zh: '平台', en: 'Platforms' },
   'nav.cards': { zh: '虚拟信用卡', en: 'Virtual Cards' },
   'nav.content': { zh: '行业动态', en: 'Industry News' },
   'nav.language': { zh: 'EN', en: '中文' },
@@ -14,9 +15,11 @@ const translations = {
   // Homepage
   'home.hero.title': { zh: '发现适合你的虚拟信用卡', en: 'Find the Right Virtual Card' },
   'home.hero.desc': { zh: '比较开卡费、手续费、币种和使用场景，掌握虚拟卡行业最新动态。', en: 'Compare fees, currencies, and use cases, and follow the latest virtual card industry updates.' },
+  'home.providers': { zh: '虚拟卡平台', en: 'Virtual Card Platforms' },
   'home.cards': { zh: '虚拟信用卡', en: 'Virtual Cards' },
   'home.posts': { zh: '行业动态', en: 'Industry News' },
   'home.pinned': { zh: '精选', en: 'Featured' },
+  'home.view_all_providers': { zh: '浏览全部平台', en: 'Browse All Platforms' },
   'home.view_all_cards': { zh: '浏览全部虚拟卡', en: 'Browse All Cards' },
   'home.view_all_posts': { zh: '查看全部行业动态', en: 'View All Industry News' },
   'home.no_results': { zh: '暂无平台数据', en: 'No platforms found' },
@@ -34,6 +37,7 @@ const translations = {
   'provider.region': { zh: '地区', en: 'Region' },
   'provider.description': { zh: '平台描述', en: 'Description' },
   'provider.cards': { zh: '卡段列表', en: 'Card BINs' },
+  'provider.cards_count': { zh: '个卡段', en: 'BINs' },
   'provider.view_detail': { zh: '查看详情', en: 'View Details' },
   'provider.back': { zh: '返回首页', en: 'Back to Home' },
   'provider.not_found': { zh: '平台未找到', en: 'Platform not found' },
@@ -56,6 +60,13 @@ const translations = {
   'cards.search': { zh: '搜索卡号段、提供商、币种或使用场景', en: 'Search BIN, provider, currency, or use case' },
   'cards.results': { zh: '张虚拟卡', en: 'virtual cards' },
   'cards.no_results': { zh: '没有找到匹配的虚拟信用卡', en: 'No matching virtual cards found' },
+
+  // Provider Directory
+  'providers.title': { zh: '虚拟卡平台目录', en: 'Virtual Card Platform Directory' },
+  'providers.desc': { zh: '比较虚拟信用卡平台的开户方式、KYC 要求、支持地区、标签和可用卡段数量，进入平台详情查看完整卡段列表。', en: 'Compare virtual card platforms by onboarding, KYC requirements, supported regions, tags, and available BIN counts, then open a platform for its full card list.' },
+  'providers.search': { zh: '搜索平台名称或地区', en: 'Search platform name or region' },
+  'providers.results': { zh: '家平台', en: 'platforms' },
+  'providers.no_results': { zh: '没有找到匹配的虚拟卡平台', en: 'No matching platforms found' },
 
   // Content
   'content.title': { zh: '行业动态', en: 'Industry News' },
@@ -87,4 +98,13 @@ export function t(key: string, lang: Lang): string {
 export function getLang(value: string | undefined): Lang {
   if (value === 'en') return 'en';
   return 'zh';
+}
+
+// Language lives in the URL: /en/* serves English, unprefixed paths serve Chinese.
+export function pathLang(path: string): Lang {
+  return path === '/en' || path.startsWith('/en/') ? 'en' : 'zh';
+}
+
+export function langPath(lang: Lang, path: string): string {
+  return lang === 'en' ? `/en${path === '/' ? '' : path}` : path;
 }

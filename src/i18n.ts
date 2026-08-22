@@ -4,7 +4,6 @@ const translations = {
   // Site
   'site.title': { zh: 'VCC虚拟卡目录', en: 'VCC Directory' },
   'site.description': { zh: 'VCC虚拟卡目录收录全球虚拟信用卡平台，提供开卡费、充值费率、月费、支持币种及使用场景对比，帮助你筛选适合广告投放、订阅和跨境支付的虚拟卡。', en: 'Explore global virtual credit card platforms and compare issuance fees, funding rates, monthly costs, supported currencies, and use cases for advertising, subscriptions, and cross-border payments.' },
-  'site.subtitle': { zh: '发现全球最佳虚拟信用卡平台', en: 'Discover the Best Virtual Credit Card Platforms' },
 
   // Navigation
   'nav.home': { zh: '首页', en: 'Home' },
@@ -15,10 +14,7 @@ const translations = {
   // Homepage
   'home.hero.title': { zh: '发现适合你的虚拟信用卡', en: 'Find the Right Virtual Card' },
   'home.hero.desc': { zh: '比较开卡费、手续费、币种和使用场景，掌握虚拟卡行业最新动态。', en: 'Compare fees, currencies, and use cases, and follow the latest virtual card industry updates.' },
-  'home.featured_cards': { zh: '精选虚拟信用卡', en: 'Featured Virtual Cards' },
   'home.cards': { zh: '虚拟信用卡', en: 'Virtual Cards' },
-  'home.featured_posts': { zh: '精选文章', en: 'Featured Articles' },
-  'home.latest_posts': { zh: '最新文章', en: 'Latest Articles' },
   'home.posts': { zh: '行业动态', en: 'Industry News' },
   'home.pinned': { zh: '精选', en: 'Featured' },
   'home.view_all_cards': { zh: '浏览全部虚拟卡', en: 'Browse All Cards' },
@@ -29,7 +25,6 @@ const translations = {
   'home.stats.tags': { zh: '标签数量', en: 'Tags' },
 
   // Provider
-  'provider.detail': { zh: '平台详情', en: 'Platform Details' },
   'provider.website': { zh: '官网', en: 'Website' },
   'provider.founded': { zh: '建立日期', en: 'Founded' },
   'provider.apply_method': { zh: '开户途径', en: 'Apply Method' },
@@ -39,15 +34,11 @@ const translations = {
   'provider.region': { zh: '地区', en: 'Region' },
   'provider.description': { zh: '平台描述', en: 'Description' },
   'provider.cards': { zh: '卡段列表', en: 'Card BINs' },
-  'provider.cards_count': { zh: '个卡段', en: 'BINs' },
   'provider.view_detail': { zh: '查看详情', en: 'View Details' },
   'provider.back': { zh: '返回首页', en: 'Back to Home' },
   'provider.not_found': { zh: '平台未找到', en: 'Platform not found' },
 
   // Card
-  'card.detail': { zh: '卡段详情', en: 'Card BIN Details' },
-  'card.bin': { zh: 'BIN', en: 'BIN' },
-  'card.type': { zh: '卡组织', en: 'Card Network' },
   'card.currency': { zh: '币种', en: 'Currency' },
   'card.issuance_fee': { zh: '开卡费', en: 'Issuance Fee' },
   'card.fee_rate': { zh: '手续费率', en: 'Fee Rate' },
@@ -69,22 +60,17 @@ const translations = {
   // Content
   'content.title': { zh: '行业动态', en: 'Industry News' },
   'content.desc': { zh: '关注虚拟信用卡行业动态、平台评测、费率变化、合规趋势和实用指南。', en: 'Follow virtual card industry news, provider reviews, fee changes, compliance trends, and practical guides.' },
-  'content.latest': { zh: '最新文章', en: 'Latest Articles' },
   'content.read_more': { zh: '阅读全文', en: 'Read More' },
   'content.no_results': { zh: '暂无行业动态', en: 'No industry news yet' },
   'content.not_found': { zh: '文章未找到', en: 'Article not found' },
   'content.back': { zh: '返回行业动态', en: 'Back to Industry News' },
 
   // Common
-  'common.status': { zh: '状态', en: 'Status' },
-  'common.active': { zh: '活跃', en: 'Active' },
-  'common.inactive': { zh: '停用', en: 'Inactive' },
   'common.free': { zh: '免费', en: 'Free' },
   'common.visit': { zh: '访问', en: 'Visit' },
   'common.na': { zh: '暂无', en: 'N/A' },
   'common.previous': { zh: '上一页', en: 'Previous' },
   'common.next': { zh: '下一页', en: 'Next' },
-  'common.page': { zh: '第 {page} 页', en: 'Page {page}' },
 
   // Footer
   'footer.text': { zh: '虚拟信用卡平台目录 — 信息仅供参考，请自行验证', en: 'VCC Platform Directory — Information for reference only, please verify independently' },

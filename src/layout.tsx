@@ -33,6 +33,8 @@ export function Layout({ title, description, lang, canonicalUrl, noIndex, follow
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="theme-color" content="#4f46e5" />
+        <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%234f46e5'/%3E%3Ctext x='32' y='43' font-family='Arial,sans-serif' font-size='26' font-weight='bold' fill='%23fff' text-anchor='middle'%3EVC%3C/text%3E%3C/svg%3E" />
         <title>{fullTitle}</title>
         <meta name="description" content={desc} />
         <meta name="robots" content={noIndex ? `noindex, ${followWhenNoIndex ? 'follow' : 'nofollow'}` : 'index, follow, max-image-preview:large'} />
@@ -56,8 +58,6 @@ export function Layout({ title, description, lang, canonicalUrl, noIndex, follow
           __html: `${styles}
             .card-hover { transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease; }
             .card-hover:hover { transform: translateY(-4px); border-color: rgba(99,102,241,.22); box-shadow: 0 24px 55px -24px rgba(79,70,229,.28); }
-            .tag-pill { transition: all 0.15s ease; }
-            .tag-pill:hover { transform: scale(1.05); }
             .content-prose > * + * { margin-top: 1rem; }
             .content-prose h2 { font-size: 1.5rem; line-height: 1.3; font-weight: 750; color: #0f172a; margin-top: 2.25rem; letter-spacing: -.02em; }
             .content-prose h3 { font-size: 1.2rem; line-height: 1.4; font-weight: 700; color: #0f172a; margin-top: 1.75rem; }
@@ -66,8 +66,6 @@ export function Layout({ title, description, lang, canonicalUrl, noIndex, follow
             .content-prose ol { list-style: decimal; }
             .content-prose blockquote { border-left: 3px solid #818cf8; padding: 1rem 1.25rem; color: #475569; background: #eef2ff; border-radius: 0 1rem 1rem 0; }
             .content-prose a { color: #4f46e5; text-decoration: underline; text-underline-offset: 3px; }
-            .rich-editor:empty:before { content: attr(data-placeholder); color: #9ca3af; }
-            .rich-editor:focus { outline: none; box-shadow: 0 0 0 2px #3b82f6; border-color: transparent; }
           `
         }} />
       </head>

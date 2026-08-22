@@ -32,6 +32,11 @@ app.use('*', async (c, next) => {
   }
 
   await next();
+
+  // Public pages vary by the lang cookie, so keep HTML out of browser and edge caches.
+  if ((c.res.headers.get('Content-Type') || '').startsWith('text/html')) {
+    c.res.headers.set('Cache-Control', 'no-cache');
+  }
 });
 
 // ==========================================
@@ -116,7 +121,7 @@ export function sanitizeContentHtml(html: string): string {
     if (tag.startsWith('</')) return `</${name}>`;
     if (name === 'br' || name === 'hr') return `<${name}>`;
     if (name === 'a') {
-      const hrefMatch = attrs.match(/\s href=(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+      const hrefMatch = attrs.match(/(?:^|\s)href=(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
       const href = hrefMatch ? (hrefMatch[1] || hrefMatch[2] || hrefMatch[3] || '').trim() : '';
       if (!href || !safeHref(href)) return '<a>';
       return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">`;
@@ -385,7 +390,7 @@ function baseJsonLd(c: Context<Env>, lang: Lang) {
       publisher: { '@id': `${origin}/#organization` },
       potentialAction: {
         '@type': 'SearchAction',
-        target: `${origin}/?q={search_term_string}`,
+        target: `${origin}/cards?q={search_term_string}`,
         'query-input': 'required name=search_term_string',
       },
     },
@@ -994,10 +999,11 @@ app.get('/', async (c) => {
     FROM vcc_cards c INNER JOIN vcc_providers p ON p.id = c.provider_id
     WHERE c.status = ? AND p.status = ?`;
 
-  const [providerCount, cardCount, tagCount, homepageCards, homepagePosts] = await Promise.all([
-    db.prepare('SELECT COUNT(*) AS c FROM vcc_providers WHERE status = ?').bind('active').first<{ c: number }>(),
-    db.prepare('SELECT COUNT(*) AS c FROM vcc_cards WHERE status = ?').bind('active').first<{ c: number }>(),
-    db.prepare('SELECT COUNT(*) AS c FROM vcc_tags').first<{ c: number }>(),
+  const [stats, homepageCards, homepagePosts] = await Promise.all([
+    db.prepare(`SELECT
+      (SELECT COUNT(*) FROM vcc_providers WHERE status = 'active') AS providers,
+      (SELECT COUNT(*) FROM vcc_cards WHERE status = 'active') AS cards,
+      (SELECT COUNT(*) FROM vcc_tags) AS tags`).first<{ providers: number; cards: number; tags: number }>(),
     db.prepare(`${cardSelect} ORDER BY c.is_featured DESC, c.created_at DESC LIMIT 6`).bind('active', 'active').all<CardWithProvider>(),
     db.prepare('SELECT * FROM content_posts WHERE status = ? ORDER BY is_featured DESC, published_at DESC LIMIT 6').bind('published').all<ContentPost>(),
   ]);
@@ -1039,7 +1045,7 @@ app.get('/', async (c) => {
                 <div class="mt-8 flex items-end justify-between"><div><div class="text-[10px] uppercase tracking-widest text-brand-200">{lang === 'zh' ? '服务商' : 'Provider'}</div><div class="mt-1 text-sm font-semibold text-white">{homepageCards.results[0] ? (lang === 'zh' ? homepageCards.results[0].provider_name_zh : homepageCards.results[0].provider_name_en) : 'VCC Directory'}</div></div><div class="flex h-10 w-14 items-center justify-center rounded-xl bg-white/10 text-xs font-black text-white">{homepageCards.results[0]?.card_type || 'VCC'}</div></div>
               </div>
             </div>
-            <div class="absolute -bottom-8 -left-8 -rotate-3 rounded-2xl border border-white/15 bg-slate-900/80 px-5 py-4 shadow-xl backdrop-blur"><div class="text-xs text-slate-400">{t('home.stats.cards', lang)}</div><div class="mt-1 text-2xl font-black text-white">{cardCount?.c || 0}<span class="ml-2 text-xs font-semibold text-accent-300">Verified</span></div></div>
+            <div class="absolute -bottom-8 -left-8 -rotate-3 rounded-2xl border border-white/15 bg-slate-900/80 px-5 py-4 shadow-xl backdrop-blur"><div class="text-xs text-slate-400">{t('home.stats.cards', lang)}</div><div class="mt-1 text-2xl font-black text-white">{stats?.cards || 0}<span class="ml-2 text-xs font-semibold text-accent-300">Verified</span></div></div>
           </div>
         </div>
       </section>
@@ -1047,9 +1053,9 @@ app.get('/', async (c) => {
       <section class="relative z-10 mx-auto -mt-8 max-w-4xl px-4">
         <div class="grid grid-cols-3 overflow-hidden rounded-3xl border border-white bg-white/95 shadow-lift backdrop-blur">
           {[
-            { label: t('home.stats.platforms', lang), value: providerCount?.c || 0 },
-            { label: t('home.stats.cards', lang), value: cardCount?.c || 0 },
-            { label: t('home.stats.tags', lang), value: tagCount?.c || 0 },
+            { label: t('home.stats.platforms', lang), value: stats?.providers || 0 },
+            { label: t('home.stats.cards', lang), value: stats?.cards || 0 },
+            { label: t('home.stats.tags', lang), value: stats?.tags || 0 },
           ].map((stat, index) => (
             <div class={`px-3 py-5 text-center sm:p-6 ${index > 0 ? 'border-l border-slate-100' : ''}`}><div class="text-2xl font-black tracking-tight text-brand-600 sm:text-3xl">{stat.value}</div><div class="mt-1 text-[11px] font-medium text-slate-500 sm:text-sm">{stat.label}</div></div>
           ))}
@@ -1084,9 +1090,10 @@ app.get('/cards', async (c) => {
   const where = ['c.status = ?', 'p.status = ?'];
   const params: unknown[] = ['active', 'active'];
   if (search) {
-    where.push('(c.bin LIKE ? OR c.card_type LIKE ? OR c.currency LIKE ? OR c.usage LIKE ? OR c.description LIKE ? OR p.name_zh LIKE ? OR p.name_en LIKE ?)');
-    const pattern = `%${search}%`;
-    params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+    const columns = ['c.bin', 'c.card_type', 'c.currency', 'c.usage', 'c.description', 'p.name_zh', 'p.name_en'];
+    where.push(`(${columns.map((column) => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')})`);
+    const pattern = `%${search.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+    params.push(...columns.map(() => pattern));
   }
   const whereSql = where.join(' AND ');
   const [countRow, cardRows] = await Promise.all([

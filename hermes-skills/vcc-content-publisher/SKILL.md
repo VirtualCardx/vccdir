@@ -5,13 +5,17 @@ description: Maintain VCC Directory providers, card BINs, tags, images, and bili
 
 # VCC Directory Maintainer
 
-Maintain `https://vccdir.com` only through `/api/admin/*`. The website has no login or admin UI.
+Maintain `https://www.vccdir.com` only through `/api/admin/*`. The website has no login or admin UI.
+
+## Public Site
+
+Public pages: `/providers` (platform directory), `/provider/{slug}` (platform with its card BINs), `/cards` (BIN directory), `/card/{slug}`, `/content`, and `/content/{slug}`. Chinese pages are unprefixed; English versions live under `/en/` with the same paths and render from the same records. The homepage shows a platforms section (most recently updated first), featured and latest cards, and featured and latest articles.
 
 ## Authentication
 
 Set these Hermes environment variables:
 
-- `VCC_BASE_URL`, normally `https://vccdir.com`
+- `VCC_BASE_URL`, normally `https://www.vccdir.com` (use the `www` host; the bare domain redirects every request, including API calls)
 - `VCC_HERMES_API_TOKEN`, matching the Worker secret `HERMES_API_TOKEN`
 
 Send JSON requests with:
@@ -31,7 +35,7 @@ Never expose the token in content, logs, Git files, screenshots, or public pages
 - Prefer deactivation or draft status when historical URLs should disappear without deleting data.
 - Send `null` to clear an optional field. Omitting it preserves the current value.
 - Use numeric values for fees and rates; they must be non-negative.
-- Verify every mutation with the corresponding API `GET`, then check its public URL when active or published.
+- Verify every mutation with the corresponding API `GET`, then check its public URL in either language (`/path` or `/en/path`) when active or published.
 - Delete only incorrect, duplicate, spam, or intentionally removed records.
 
 ## Images
@@ -88,7 +92,7 @@ Create requires `name_zh` and `name_en`. Other fields are `slug`, `website` (HTT
 }
 ```
 
-Deleting a provider also deletes its card BINs and tag relationships.
+Deleting a provider also deletes its card BINs and tag relationships. Active providers appear in the `/providers` directory and the homepage platforms section, ordered by most recently updated.
 
 ## Card BINs
 
@@ -135,6 +139,6 @@ Bodies may contain `p`, `br`, `strong`, `b`, `em`, `i`, `u`, `h2`, `h3`, `ul`, `
 3. Update or create providers and assign `tag_ids`.
 4. Update or create card BINs under the verified provider ID.
 5. Draft and review bilingual industry news, then publish it with an intentional featured status.
-6. Verify the API record and public `/provider/{slug}`, `/card/{slug}`, or `/content/{slug}` page.
+6. Verify the API record and the public `/provider/{slug}`, `/card/{slug}`, or `/content/{slug}` page in either language.
 
 Treat `400` as invalid data, `409` as a duplicate unique value, `413` as an oversized request, and `415` as an unsupported content type. Correct the request rather than retrying it unchanged.

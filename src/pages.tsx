@@ -262,7 +262,8 @@ export async function providerPage(c: Context<Env>) {
   const db = c.env.DB;
   const slug = c.req.param('slug');
 
-  const provider = await db.prepare('SELECT * FROM vcc_providers WHERE slug = ? AND status = ?').bind(slug, 'active').first<Provider>();
+  // Inactive providers keep their URL and return 200 with a stopped-operating notice instead of a 404.
+  const provider = await db.prepare('SELECT * FROM vcc_providers WHERE slug = ?').bind(slug).first<Provider>();
   if (!provider) {
     return c.html(
       <Layout title={t('provider.not_found', lang)} lang={lang} active="providers" canonicalUrl={absoluteUrl(c, langPath(lang, `/provider/${slug}`))} noIndex>
@@ -274,6 +275,7 @@ export async function providerPage(c: Context<Env>) {
       404
     );
   }
+  const isActive = provider.status === 'active';
 
   const [cards, providerTags] = await Promise.all([
     db.prepare('SELECT * FROM vcc_cards WHERE provider_id = ? AND status = ? ORDER BY issuance_fee ASC').bind(provider.id, 'active').all<Card>(),
@@ -281,7 +283,7 @@ export async function providerPage(c: Context<Env>) {
   ]);
   const rawDescription = (lang === 'zh' ? provider.desc_zh : provider.desc_en)?.trim();
 
-  const jsonLd = [
+  const jsonLd = isActive ? [
     ...baseJsonLd(c, lang),
     breadcrumbJsonLd(c, [
       { name: t('nav.home', lang), path: langPath(lang, '/') },
@@ -307,10 +309,10 @@ export async function providerPage(c: Context<Env>) {
         price: card.issuance_fee,
       })),
     },
-  ];
+  ] : undefined;
 
   return c.html(
-    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} active="providers" canonicalUrl={absoluteUrl(c, langPath(lang, `/provider/${provider.slug}`))} alternates={{ zh: absoluteUrl(c, `/provider/${provider.slug}`), en: absoluteUrl(c, `/en/provider/${provider.slug}`) }} jsonLd={jsonLd}>
+    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} active="providers" noIndex={!isActive} canonicalUrl={absoluteUrl(c, langPath(lang, `/provider/${provider.slug}`))} alternates={isActive ? { zh: absoluteUrl(c, `/provider/${provider.slug}`), en: absoluteUrl(c, `/en/provider/${provider.slug}`) } : undefined} jsonLd={jsonLd}>
       <div class="page-shell py-10 sm:py-14">
         {/* Breadcrumb */}
         <nav class="breadcrumb mb-6">
@@ -318,6 +320,16 @@ export async function providerPage(c: Context<Env>) {
           <span class="mx-2">/</span>
           <span class="text-slate-900">{providerName(provider, lang)}</span>
         </nav>
+
+        {!isActive && (
+          <div class="mb-8 flex items-start gap-3 rounded-2xl border border-amber-300/70 bg-amber-50 p-5 text-amber-900 shadow-soft" role="alert">
+            <Icon name="shield" class="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+            <div>
+              <p class="font-bold">{t('provider.closed_title', lang)}</p>
+              <p class="mt-1 text-sm leading-6">{t('provider.closed_desc', lang)}</p>
+            </div>
+          </div>
+        )}
 
         {/* Provider Header */}
         <div class="surface-card mb-10 p-6 sm:p-8">

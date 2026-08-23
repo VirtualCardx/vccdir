@@ -41,6 +41,8 @@ const translations = {
   'provider.view_detail': { zh: '查看详情', en: 'View Details' },
   'provider.back': { zh: '返回首页', en: 'Back to Home' },
   'provider.not_found': { zh: '平台未找到', en: 'Platform not found' },
+  'provider.closed_title': { zh: '该平台已停止运营', en: 'This platform has stopped operating' },
+  'provider.closed_desc': { zh: '该虚拟卡平台已关闭或停止服务，页面信息仅作历史参考。请勿进行新的充值或申请，如有未用余额请尽快通过官方渠道处理。', en: 'This virtual card platform has shut down or stopped serving; the information on this page is historical reference only. Do not make new deposits or applications, and settle any remaining balance through official channels promptly.' },
 
   // Card
   'card.currency': { zh: '币种', en: 'Currency' },

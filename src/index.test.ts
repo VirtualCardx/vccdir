@@ -91,18 +91,34 @@ describe('public routing', () => {
     expect(response.headers.get('Location')).toBe('/cards?q=visa');
   });
 
-  it('requires active providers on public detail pages', async () => {
+  it('returns 404 only for unknown providers', async () => {
     const env = {
       ...baseEnv,
       DB: mockDatabase({
         assertQuery: (query, params) => {
-          expect(query).toContain('status = ?');
-          expect(params).toEqual(['hidden-provider', 'active']);
+          expect(query).toContain('FROM vcc_providers WHERE slug = ?');
+          expect(params).toEqual(['hidden-provider']);
         },
       }),
     } as CloudflareBindings;
     const response = await app.request('https://www.vccdir.com/provider/hidden-provider', {}, env);
     expect(response.status).toBe(404);
+  });
+
+  it('serves inactive providers with a stopped-operating notice', async () => {
+    const env = {
+      ...baseEnv,
+      DB: mockDatabase({
+        first: { id: 7, slug: 'gone-card', name_zh: '停运平台', name_en: 'Gone Platform', status: 'inactive' },
+      }),
+    } as CloudflareBindings;
+    const response = await app.request('https://www.vccdir.com/provider/gone-card', {}, env);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('该平台已停止运营');
+    expect(body).toContain('停运平台');
+    expect(body).toContain('noindex');
+    expect(body).not.toContain('FinancialProduct');
   });
 
   it('requires active cards and providers on public card pages', async () => {

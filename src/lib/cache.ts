@@ -60,15 +60,23 @@ export async function purgePaths(origin: string, paths: string[]): Promise<void>
   await Promise.all(paths.map((path) => caches.default.delete(new Request(origin + path, { method: 'GET' }))));
 }
 
+// Returns FULL origin-prefixed URLs: purgePaths strips the origin again, so list
+// pagination must be absolute like the detail paths to survive that strip.
 async function listPagePaths(db: D1Database, origin: string, countSql: string, pageSize: number, bases: string[]): Promise<string[]> {
   const row = await db.prepare(countSql).first<{ c: number }>();
   const pages = Math.min(Math.ceil((row?.c || 0) / pageSize) + 1, 50);
   const paths: string[] = [];
-  for (const base of bases) for (let page = 1; page <= pages; page++) paths.push(page > 1 ? `${base}?page=${page}` : base);
+  for (const base of bases) {
+    for (let page = 1; page <= pages; page++) {
+      paths.push(page > 1 ? `${origin}${base}?page=${page}` : `${origin}${base}`);
+      // page=1 is stored as a distinct key when requested explicitly with ?page=1.
+      if (page === 1) paths.push(`${origin}${base}?page=1`);
+    }
+  }
   return paths;
 }
 
-const homeAndSitemap = (origin: string) => [`${origin}/`, `${origin}/en`, `${origin}/sitemap.xml`];
+const homeAndSitemap = (origin: string) => [`${origin}/`, `${origin}/en`, `${origin}/en/`, `${origin}/sitemap.xml`];
 
 export async function purgeProviderUpdate(db: D1Database, origin: string, slugs: string[]): Promise<void> {
   const paths = homeAndSitemap(origin);

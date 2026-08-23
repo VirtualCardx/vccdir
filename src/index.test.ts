@@ -384,6 +384,41 @@ describe('Hermes API mutations', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
   });
+
+  it('allows updating cards with legacy non-numeric bins when bin is unchanged', async () => {
+    const legacyCard = { id: 57, slug: 'koko-visa-sg', bin: 'KOKO_Visa Virtual (Singapore)', card_type: 'Visa', currency: 'USD', provider_id: 2, status: 'active', is_featured: 0, description_zh: null, description_en: null };
+    const env = {
+      ...baseEnv,
+      DB: mockDatabase({ first: legacyCard }),
+    } as CloudflareBindings;
+    const unchanged = await app.request('https://www.vccdir.com/api/admin/cards/57', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify({ description_zh: '中文卡段说明' }),
+    }, env);
+    expect(unchanged.status).toBe(200);
+
+    const sameBin = await app.request('https://www.vccdir.com/api/admin/cards/57', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify({ bin: 'KOKO_Visa Virtual (Singapore)', description_zh: '再次更新' }),
+    }, env);
+    expect(sameBin.status).toBe(200);
+
+    const invalid = await app.request('https://www.vccdir.com/api/admin/cards/57', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify({ bin: 'Not A Bin' }),
+    }, env);
+    expect(invalid.status).toBe(400);
+
+    const numeric = await app.request('https://www.vccdir.com/api/admin/cards/57', {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify({ bin: '491653' }),
+    }, env);
+    expect(numeric.status).toBe(200);
+  });
 });
 
 describe('meta description sanitizing', () => {
@@ -429,6 +464,31 @@ describe('meta description sanitizing', () => {
     }, { ...baseEnv, DB: mockDatabase(), R2: { delete: async () => undefined } as unknown as R2Bucket });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
+  });
+});
+
+describe('cache purge', () => {
+  it('purges list pagination with full-URL cache keys', async () => {
+    const deleted: string[] = [];
+    const globalScope = globalThis as unknown as { caches?: unknown };
+    globalScope.caches = { default: { delete: async (request: Request) => { deleted.push(request.url); return true; } } };
+    try {
+      const { purgeCardUpdate } = await import('./lib/cache');
+      // 13 cards and 13 providers → 3 list pages each (with the +1 margin page).
+      await purgeCardUpdate(mockDatabase({ first: { c: 13 } }) as unknown as D1Database, 'https://www.vccdir.com', ['card-x'], ['prov-y']);
+    } finally {
+      delete globalScope.caches;
+    }
+    expect(deleted).toContain('https://www.vccdir.com/cards');
+    expect(deleted).toContain('https://www.vccdir.com/cards?page=1');
+    expect(deleted).toContain('https://www.vccdir.com/cards?page=2');
+    expect(deleted).toContain('https://www.vccdir.com/en/cards?page=2');
+    expect(deleted).toContain('https://www.vccdir.com/providers?page=2');
+    expect(deleted).toContain('https://www.vccdir.com/card/card-x');
+    expect(deleted).toContain('https://www.vccdir.com/en/provider/prov-y');
+    expect(deleted).toContain('https://www.vccdir.com/');
+    expect(deleted).toContain('https://www.vccdir.com/sitemap.xml');
+    expect(deleted.every((url) => url.startsWith('https://www.vccdir.com/'))).toBe(true);
   });
 });
 

@@ -377,8 +377,11 @@ adminApi.put('/cards/:id', async (c) => {
   const provider = await c.env.DB.prepare('SELECT id, slug FROM vcc_providers WHERE id = ?').bind(providerId).first<{ id: number; slug: string }>();
   if (!provider) throw new ApiError(400, 'provider_id does not exist');
   const previousProvider = await c.env.DB.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(existing.provider_id).first<{ slug: string }>();
-  const bin = stringField(body, 'bin', existing.bin);
-  if (!/^\d{6,19}$/.test(bin)) throw new ApiError(400, 'bin must contain 6 to 19 digits');
+  // Historical rows may carry product names as bin; only validate when the value actually changes.
+  const requestedBin = stringField(body, 'bin', existing.bin);
+  const binChanged = requestedBin !== existing.bin;
+  if (binChanged && !/^\d{6,19}$/.test(requestedBin)) throw new ApiError(400, 'bin must contain 6 to 19 digits');
+  const bin = requestedBin;
   const currency = stringField(body, 'currency', existing.currency).toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) throw new ApiError(400, 'currency must be a three-letter code');
   const newSlug = assertSlug(stringField(body, 'slug', existing.slug));

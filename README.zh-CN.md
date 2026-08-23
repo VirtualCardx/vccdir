@@ -79,7 +79,6 @@ npm run db:migrate:remote
 
 - `GET /`
 - `GET /providers`：虚拟卡平台目录，支持 `q` 搜索和 `page` 分页
-- `GET /cards`：虚拟信用卡卡段目录，支持 `q` 搜索和 `page` 分页
 - `GET /provider/:slug`
 - `GET /card/:slug`
 - `GET /content`
@@ -89,9 +88,9 @@ npm run db:migrate:remote
 - `GET /robots.txt`
 - `GET /lang/:lang`
 
-平台与卡段是父子关系：`/providers` 按平台浏览（地区、KYC、标签、卡段数量等平台级信息），平台详情页列出该平台全部卡段，`/cards` 按卡头（BIN）横向浏览和比较所有卡段。首页同时提供"虚拟卡平台"和"虚拟信用卡"两个栏目。
+平台与卡段是父子关系：`/providers` 按平台浏览（地区、KYC、标签、卡段数量等平台级信息），平台详情页列出该平台全部卡段，卡段详情页经平台页或直接 URL 访问。首页提供"虚拟卡平台"栏目（最多 9 个平台）与行业动态。
 
-搜索词会按字节预算截断，保证 SQL LIKE 模式不超过 D1 的 50 字节上限。
+原卡段目录 `/cards` 已移除，301 跳转到 `/providers`。搜索词会按字节预算截断，保证 SQL LIKE 模式不超过 D1 的 50 字节上限。
 
 语言由 URL 决定：无前缀路径为中文，`/en/*` 为英文。所有可索引页面输出 `hreflang` 备选链接（`zh-CN`、`en`、`x-default`），sitemap 同时列出两种语言版本。`lang` cookie 为 `en` 的访问者会被 302 跳转到 `/en` 页面；不带 cookie 的爬虫始终看到默认中文 URL，已有索引数据不受影响。
 

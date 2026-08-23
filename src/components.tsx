@@ -141,40 +141,6 @@ export function ProviderTile({ provider, lang }: { provider: ProviderWithTags; l
   );
 }
 
-export function CardTile({ card, lang }: { card: CardWithProvider; lang: Lang }) {
-  const name = lang === 'zh' ? card.provider_name_zh : card.provider_name_en;
-  return (
-    <a href={langPath(lang, `/card/${card.slug}`)} class="card-hover group relative block overflow-hidden rounded-3xl border border-slate-200/70 bg-white p-6 shadow-soft">
-      <div class="mb-5 flex items-center justify-between gap-3">
-        <div class="flex min-w-0 items-center gap-3">
-          {card.provider_logo_url ? (
-            <img src={`/images/${card.provider_logo_url}`} alt="" width="44" height="44" loading="lazy" class="h-11 w-11 rounded-xl object-cover" />
-          ) : (
-            <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-100 to-accent-50 font-bold text-brand-700 ring-1 ring-brand-100">{name.charAt(0)}</div>
-          )}
-          <div class="min-w-0">
-            <div class="truncate text-sm font-medium text-slate-500">{name}</div>
-            <h3 class="font-mono text-lg font-bold tracking-tight text-slate-950">{card.bin}</h3>
-          </div>
-        </div>
-        <div class="flex shrink-0 flex-col items-end gap-1.5">
-          {card.is_featured === 1 && <span class="status-featured">{t('home.pinned', lang)}</span>}
-          <span class={`rounded-lg px-2.5 py-1 text-xs font-bold ${card.card_type === 'Visa' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>{card.card_type}</span>
-        </div>
-      </div>
-      <div class="grid grid-cols-3 gap-2 rounded-2xl bg-slate-50/90 p-3 text-center ring-1 ring-slate-100">
-        <div><div class="text-[11px] text-slate-400">{t('card.issuance_fee', lang)}</div><div class="mt-1 font-bold text-slate-900">{card.issuance_fee === 0 ? t('common.free', lang) : `$${card.issuance_fee}`}</div></div>
-        <div class="border-x border-slate-200"><div class="text-[11px] text-slate-400">{t('card.fee_rate', lang)}</div><div class="mt-1 font-bold text-slate-900">{card.fee_rate}%</div></div>
-        <div><div class="text-[11px] text-slate-400">{t('card.currency', lang)}</div><div class="mt-1 font-bold text-slate-900">{card.currency}</div></div>
-      </div>
-      <div class="mt-4 flex items-center justify-between gap-3 text-sm">
-        <span class="truncate text-slate-500">{card.usage || t('common.na', lang)}</span>
-        <span class="shrink-0 font-medium text-brand-600 group-hover:translate-x-0.5">{t('provider.view_detail', lang)} &rarr;</span>
-      </div>
-    </a>
-  );
-}
-
 export function ArticleTile({ post, lang, prominent = false }: { post: ContentPost; lang: Lang; prominent?: boolean }) {
   return (
     <article class="card-hover group overflow-hidden rounded-3xl border border-slate-200/70 bg-white shadow-soft">

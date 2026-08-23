@@ -9,7 +9,7 @@ Maintain `https://www.vccdir.com` only through `/api/admin/*`. The website has n
 
 ## Public Site
 
-Public pages: `/providers` (platform directory), `/provider/{slug}` (platform with its card BINs), `/cards` (BIN directory), `/card/{slug}`, `/content`, and `/content/{slug}`. Chinese pages are unprefixed; English versions live under `/en/` with the same paths and render from the same records. The homepage shows a platforms section (most recently updated first), featured and latest cards, and featured and latest articles.
+Public pages: `/providers` (platform directory), `/provider/{slug}` (platform with its card BINs), `/card/{slug}`, `/content`, and `/content/{slug}`. The former `/cards` BIN directory was removed and 301-redirects to `/providers`. Chinese pages are unprefixed; English versions live under `/en/` with the same paths and render from the same records. The homepage shows a platforms section (most recently updated first, up to nine) and featured and latest articles.
 
 ## Authentication
 

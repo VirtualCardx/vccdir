@@ -75,9 +75,9 @@ The migration removes the obsolete `admin_users` table and adds common query ind
 
 ## Routes
 
-Public routes include `/`, `/providers`, `/cards`, `/provider/:slug`, `/card/:slug`, `/content`, `/content/:slug`, `/images/*`, `/sitemap.xml`, `/robots.txt`, and `/lang/:lang`. Both directories support `q` search and `page` pagination. Search terms are truncated to keep SQL LIKE patterns within D1's 50-byte limit.
+Public routes include `/`, `/providers`, `/provider/:slug`, `/card/:slug`, `/content`, `/content/:slug`, `/images/*`, `/sitemap.xml`, `/robots.txt`, and `/lang/:lang`. The directory supports `q` search and `page` pagination. Search terms are truncated to keep SQL LIKE patterns within D1's 50-byte limit.
 
-Platforms and card BINs form a parent-child hierarchy: `/providers` browses by platform (region, KYC, tags, and BIN counts), each platform page lists all of its card BINs, and `/cards` browses and compares individual BINs across every platform. The homepage offers both a platforms section and a virtual cards section.
+Platforms and card BINs form a parent-child hierarchy: `/providers` browses by platform (region, KYC, tags, and BIN counts), each platform page lists all of its card BINs, and BIN pages are reached through platforms or their direct URLs. The former `/cards` BIN directory was removed and now 301-redirects to `/providers`. The homepage shows a platforms section (up to nine) and industry news.
 
 Language lives in the URL: unprefixed paths serve Chinese and `/en/*` serves English. Every indexed page emits `hreflang` alternates (`zh-CN`, `en`, and `x-default`) and the sitemap lists both language versions. Visitors whose `lang` cookie is `en` are redirected (302) to the `/en` page; crawlers without cookies always see the default Chinese URLs, so existing indexed URLs are unchanged.
 

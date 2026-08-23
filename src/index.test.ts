@@ -54,9 +54,22 @@ describe('public routing', () => {
   it('renders the homepage with an empty database and hardening headers', async () => {
     const response = await app.request('https://www.vccdir.com/', {}, { ...baseEnv, DB: mockDatabase() });
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain('发现适合你的虚拟信用卡');
+    const body = await response.text();
+    expect(body).toContain('发现适合你的虚拟信用卡');
+    expect(body).toContain('虚拟卡平台');
+    expect(body).not.toContain('浏览全部虚拟卡');
     expect(response.headers.get('Content-Security-Policy')).toContain('default-src');
     expect(response.headers.get('Cache-Control')).toBe('no-cache');
+  });
+
+  it('redirects the removed card directory to the platform directory', async () => {
+    const zh = await app.request('https://www.vccdir.com/cards', {}, baseEnv);
+    expect(zh.status).toBe(301);
+    expect(zh.headers.get('Location')).toBe('/providers');
+
+    const en = await app.request('https://www.vccdir.com/en/cards', {}, baseEnv);
+    expect(en.status).toBe(301);
+    expect(en.headers.get('Location')).toBe('/en/providers');
   });
 
   it('serves the English homepage at /en with hreflang alternates', async () => {
@@ -211,13 +224,13 @@ describe('public routing', () => {
     expect(body).toContain('<p>第二段</p>');
   });
 
-  it('marks card search results noindex while normal listings stay indexable', async () => {
+  it('marks provider search results noindex while normal listings stay indexable', async () => {
     const env = { ...baseEnv, DB: mockDatabase() } as CloudflareBindings;
-    const listing = await app.request('https://www.vccdir.com/cards', {}, env);
+    const listing = await app.request('https://www.vccdir.com/providers', {}, env);
     expect(listing.status).toBe(200);
     expect(await listing.text()).toContain('index, follow');
 
-    const search = await app.request('https://www.vccdir.com/cards?q=visa', {}, env);
+    const search = await app.request('https://www.vccdir.com/providers?q=visa', {}, env);
     expect(search.status).toBe(200);
     expect(await search.text()).toContain('noindex, follow');
   });
@@ -230,7 +243,7 @@ describe('public routing', () => {
         assertQuery: (_query, params) => { capturedParams = params; },
       }),
     } as CloudflareBindings;
-    const response = await app.request(`https://www.vccdir.com/cards?q=${'a'.repeat(60)}`, {}, env);
+    const response = await app.request(`https://www.vccdir.com/providers?q=${'a'.repeat(60)}`, {}, env);
     expect(response.status).toBe(200);
     const patterns = capturedParams.filter((param): param is string => typeof param === 'string' && param.startsWith('%'));
     expect(patterns.length).toBeGreaterThan(0);
@@ -261,6 +274,7 @@ describe('public routing', () => {
     expect(body).toContain('<loc>https://www.vccdir.com/</loc>');
     expect(body).toContain('<loc>https://www.vccdir.com/en</loc>');
     expect(body).toContain('<loc>https://www.vccdir.com/providers</loc>');
+    expect(body).not.toContain('/cards</loc>');
     expect(body).toContain('hreflang="x-default"');
   });
 });

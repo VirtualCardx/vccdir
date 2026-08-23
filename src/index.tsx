@@ -5,7 +5,7 @@ import { getLang, langPath } from './i18n';
 import type { Env } from './types';
 import { ApiError } from './lib/api';
 import { siteOrigin, absoluteUrl } from './lib/seo';
-import { homePage, cardsPage, providersPage, providerPage, cardPage, contentListPage, contentDetailPage } from './pages';
+import { homePage, providersPage, providerPage, cardPage, contentListPage, contentDetailPage } from './pages';
 import { adminApi } from './admin';
 
 const app = new Hono<Env>();
@@ -116,8 +116,9 @@ app.route('/api/admin', adminApi);
 app.get('/', homePage);
 app.get('/en', homePage);
 app.get('/en/', homePage);
-app.get('/cards', cardsPage);
-app.get('/en/cards', cardsPage);
+// The card BIN directory was removed; keep its link equity flowing to the platform directory.
+app.get('/cards', (c) => c.redirect('/providers', 301));
+app.get('/en/cards', (c) => c.redirect('/en/providers', 301));
 app.get('/providers', providersPage);
 app.get('/en/providers', providersPage);
 app.get('/provider/:slug', providerPage);
@@ -172,8 +173,7 @@ app.get('/sitemap.xml', async (c) => {
 
   const urls: string[] = [
     urlEntry('/', 'daily', '1.0'),
-    urlEntry('/cards', 'daily', '0.9'),
-    urlEntry('/providers', 'weekly', '0.8'),
+    urlEntry('/providers', 'weekly', '0.9'),
   ];
 
   // Inactive providers stay listed at low priority so their stopped-operating warnings stay discoverable.

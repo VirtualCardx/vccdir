@@ -7,8 +7,7 @@ const translations = {
 
   // Navigation
   'nav.home': { zh: '首页', en: 'Home' },
-  'nav.providers': { zh: '平台', en: 'Platforms' },
-  'nav.cards': { zh: '虚拟信用卡', en: 'Virtual Cards' },
+  'nav.providers': { zh: '虚拟信用卡平台', en: 'VCC Platforms' },
   'nav.content': { zh: '行业动态', en: 'Industry News' },
   'nav.language': { zh: 'EN', en: '中文' },
 
@@ -16,11 +15,9 @@ const translations = {
   'home.hero.title': { zh: '发现适合你的虚拟信用卡', en: 'Find the Right Virtual Card' },
   'home.hero.desc': { zh: '比较开卡费、手续费、币种和使用场景，掌握虚拟卡行业最新动态。', en: 'Compare fees, currencies, and use cases, and follow the latest virtual card industry updates.' },
   'home.providers': { zh: '虚拟卡平台', en: 'Virtual Card Platforms' },
-  'home.cards': { zh: '虚拟信用卡', en: 'Virtual Cards' },
   'home.posts': { zh: '行业动态', en: 'Industry News' },
   'home.pinned': { zh: '精选', en: 'Featured' },
   'home.view_all_providers': { zh: '浏览全部平台', en: 'Browse All Platforms' },
-  'home.view_all_cards': { zh: '浏览全部虚拟卡', en: 'Browse All Cards' },
   'home.view_all_posts': { zh: '查看全部行业动态', en: 'View All Industry News' },
   'home.no_results': { zh: '暂无平台数据', en: 'No platforms found' },
   'home.stats.platforms': { zh: '平台数量', en: 'Platforms' },
@@ -57,13 +54,6 @@ const translations = {
   'card.not_found': { zh: '卡段未找到', en: 'Card BIN not found' },
   'card.closed_title': { zh: '该卡段已停用', en: 'This card BIN is no longer offered' },
   'card.closed_desc': { zh: '该卡段已停止发行或停止服务，页面信息仅作历史参考，请勿用于新的申请或充值。', en: 'This card BIN is no longer issued or serviced; the information on this page is historical reference only. Do not use it for new applications or deposits.' },
-
-  // Card Directory
-  'cards.title': { zh: '虚拟信用卡目录', en: 'Virtual Card Directory' },
-  'cards.desc': { zh: '搜索并比较全球虚拟信用卡的卡组织、币种、开卡费、手续费率、月费和适用场景。', en: 'Search and compare virtual cards by network, currency, issuance fee, funding rate, monthly fee, and use case.' },
-  'cards.search': { zh: '搜索卡号段、提供商、币种或使用场景', en: 'Search BIN, provider, currency, or use case' },
-  'cards.results': { zh: '张虚拟卡', en: 'virtual cards' },
-  'cards.no_results': { zh: '没有找到匹配的虚拟信用卡', en: 'No matching virtual cards found' },
 
   // Provider Directory
   'providers.title': { zh: '虚拟卡平台目录', en: 'Virtual Card Platform Directory' },

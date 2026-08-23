@@ -119,7 +119,7 @@ export function baseJsonLd(c: Context<Env>, lang: Lang) {
       publisher: { '@id': `${origin}/#organization` },
       potentialAction: {
         '@type': 'SearchAction',
-        target: `${origin}${langPath(lang, '/cards')}?q={search_term_string}`,
+        target: `${origin}${langPath(lang, '/providers')}?q={search_term_string}`,
         'query-input': 'required name=search_term_string',
       },
     },

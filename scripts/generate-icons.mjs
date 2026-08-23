@@ -115,9 +115,11 @@ function encodeIco(png, size) {
 
 const svg = (r) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#4338ca"/></linearGradient></defs><rect width="64" height="64" rx="${r}" fill="url(#g)"/><rect x="12" y="19" width="40" height="27" rx="5" fill="#fff"/><rect x="12" y="25" width="40" height="6" fill="#22d3ee"/><rect x="17" y="36" width="16" height="4" rx="2" fill="#6366f1"/><rect x="37" y="36" width="10" height="4" rx="2" fill="#c7d2fe"/></svg>`;
 
-writeFileSync(join(OUT, 'favicon.svg'), svg(14));
-writeFileSync(join(OUT, 'logo.svg'), svg(14));
-writeFileSync(join(OUT, 'favicon-32.png'), encodePng(32, render(32, { backgroundRadius: 14 })));
-writeFileSync(join(OUT, 'favicon.ico'), encodeIco(encodePng(32, render(32, { backgroundRadius: 14 })), 32));
+// Corner radius: rx 26 on the 64-grid equals the rounded-2xl (16px) token at the
+// 40px nav display size, matching the site's button and card language.
+writeFileSync(join(OUT, 'favicon.svg'), svg(26));
+writeFileSync(join(OUT, 'logo.svg'), svg(26));
+writeFileSync(join(OUT, 'favicon-32.png'), encodePng(32, render(32, { backgroundRadius: 26 })));
+writeFileSync(join(OUT, 'favicon.ico'), encodeIco(encodePng(32, render(32, { backgroundRadius: 26 })), 32));
 writeFileSync(join(OUT, 'apple-touch-icon.png'), encodePng(180, render(180, { backgroundRadius: 0 })));
 console.log('generated: favicon.svg logo.svg favicon-32.png favicon.ico apple-touch-icon.png');

@@ -143,7 +143,7 @@ app.get('/sitemap.xml', async (c) => {
   const origin = siteOrigin(c);
 
   const [providers, cards, posts] = await Promise.all([
-    db.prepare('SELECT slug, updated_at FROM vcc_providers WHERE status = ? ORDER BY updated_at DESC').bind('active').all<{ slug: string; updated_at: string }>(),
+    db.prepare('SELECT slug, updated_at, status FROM vcc_providers ORDER BY updated_at DESC').all<{ slug: string; updated_at: string; status: string }>(),
     db.prepare('SELECT c.slug, c.created_at FROM vcc_cards c INNER JOIN vcc_providers p ON p.id = c.provider_id WHERE c.status = ? AND p.status = ? ORDER BY c.created_at DESC').bind('active', 'active').all<{ slug: string; created_at: string }>(),
     db.prepare('SELECT slug, updated_at FROM content_posts WHERE status = ? ORDER BY published_at DESC').bind('published').all<{ slug: string; updated_at: string }>(),
   ]);
@@ -173,7 +173,11 @@ app.get('/sitemap.xml', async (c) => {
     urlEntry('/providers', 'weekly', '0.8'),
   ];
 
-  for (const p of providers.results) urls.push(urlEntry(`/provider/${p.slug}`, 'weekly', '0.8', p.updated_at ? p.updated_at.split(' ')[0] : undefined));
+  // Inactive providers stay listed at low priority so their stopped-operating warnings stay discoverable.
+  for (const p of providers.results) {
+    const active = p.status === 'active';
+    urls.push(urlEntry(`/provider/${p.slug}`, active ? 'weekly' : 'yearly', active ? '0.8' : '0.3', p.updated_at ? p.updated_at.split(' ')[0] : undefined));
+  }
   for (const card of cards.results) urls.push(urlEntry(`/card/${card.slug}`, 'monthly', '0.6', card.created_at ? card.created_at.split(' ')[0] : undefined));
   urls.push(urlEntry('/content', 'weekly', '0.7'));
   for (const post of posts.results) urls.push(urlEntry(`/content/${post.slug}`, 'monthly', '0.6', post.updated_at ? post.updated_at.split(' ')[0] : undefined));

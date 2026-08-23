@@ -105,7 +105,7 @@ describe('public routing', () => {
     expect(response.status).toBe(404);
   });
 
-  it('serves inactive providers with a stopped-operating notice', async () => {
+  it('serves inactive providers with an indexable stopped-operating notice', async () => {
     const env = {
       ...baseEnv,
       DB: mockDatabase({
@@ -117,8 +117,25 @@ describe('public routing', () => {
     const body = await response.text();
     expect(body).toContain('该平台已停止运营');
     expect(body).toContain('停运平台');
-    expect(body).toContain('noindex');
+    expect(body).toContain('index, follow');
+    expect(body).not.toContain('noindex');
+    expect(body).toContain('hreflang="en"');
+    expect(body).toContain('"@type":"Organization"');
     expect(body).not.toContain('FinancialProduct');
+  });
+
+  it('lists inactive providers in the sitemap at low priority', async () => {
+    const env = {
+      ...baseEnv,
+      DB: mockDatabase({ results: [{ slug: 'gone-provider', updated_at: '2026-08-01 00:00:00', status: 'inactive' }] }),
+    } as CloudflareBindings;
+    const response = await app.request('https://www.vccdir.com/sitemap.xml', {}, env);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('<loc>https://www.vccdir.com/provider/gone-provider</loc>');
+    expect(body).toContain('<loc>https://www.vccdir.com/en/provider/gone-provider</loc>');
+    expect(body).toContain('<priority>0.3</priority>');
+    expect(body).toContain('<changefreq>yearly</changefreq>');
   });
 
   it('returns 404 only for unknown cards', async () => {

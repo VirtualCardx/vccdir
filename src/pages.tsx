@@ -283,6 +283,7 @@ export async function providerPage(c: Context<Env>) {
   ]);
   const rawDescription = (lang === 'zh' ? provider.desc_zh : provider.desc_en)?.trim();
 
+  // Warning pages must stay indexable: people searching "FomePay 停运了吗" need to find them.
   const jsonLd = isActive ? [
     ...baseJsonLd(c, lang),
     breadcrumbJsonLd(c, [
@@ -309,10 +310,23 @@ export async function providerPage(c: Context<Env>) {
         price: card.issuance_fee,
       })),
     },
-  ] : undefined;
+  ] : [
+    ...baseJsonLd(c, lang),
+    breadcrumbJsonLd(c, [
+      { name: t('nav.home', lang), path: langPath(lang, '/') },
+      { name: providerName(provider, lang), path: langPath(lang, `/provider/${provider.slug}`) },
+    ]),
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Organization',
+      name: providerName(provider, lang),
+      url: absoluteUrl(c, langPath(lang, `/provider/${provider.slug}`)),
+      description: `${t('provider.closed_title', lang)}。${t('provider.closed_desc', lang)}`,
+    },
+  ];
 
   return c.html(
-    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} active="providers" noIndex={!isActive} canonicalUrl={absoluteUrl(c, langPath(lang, `/provider/${provider.slug}`))} alternates={isActive ? { zh: absoluteUrl(c, `/provider/${provider.slug}`), en: absoluteUrl(c, `/en/provider/${provider.slug}`) } : undefined} jsonLd={jsonLd}>
+    <Layout title={providerName(provider, lang)} description={providerDesc(provider, lang)} lang={lang} active="providers" canonicalUrl={absoluteUrl(c, langPath(lang, `/provider/${provider.slug}`))} alternates={{ zh: absoluteUrl(c, `/provider/${provider.slug}`), en: absoluteUrl(c, `/en/provider/${provider.slug}`) }} jsonLd={jsonLd}>
       <div class="page-shell py-10 sm:py-14">
         {/* Breadcrumb */}
         <nav class="breadcrumb mb-6">

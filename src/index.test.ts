@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { app } from './index';
 import { generateSlug, sanitizeContentHtml } from './lib/sanitize';
-import { pageUrl, publicPageNumber } from './lib/seo';
+import { pageUrl, publicPageNumber, providerDesc } from './lib/seo';
+import { assertLogoKey } from './lib/api';
+import type { Provider } from './types';
 
 const baseEnv = {
   SITE_URL: 'https://www.vccdir.com',
@@ -256,6 +258,31 @@ describe('Hermes API mutations', () => {
     }, { ...baseEnv, DB: mockDatabase() });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
+  });
+});
+
+describe('meta description sanitizing', () => {
+  const providerWith = (desc_zh: string) => ({ name_zh: '测试平台', name_en: 'Test', desc_zh, desc_en: '' }) as unknown as Provider;
+
+  it('strips tags and entities from provider descriptions and clamps length', () => {
+    const meta = providerDesc(providerWith(`<p><strong>安全</strong>可靠&amp;快捷</p>\n${'很好'.repeat(120)}`), 'zh');
+    expect(meta).not.toContain('<');
+    expect(meta).not.toContain('&amp');
+    expect(meta.length).toBeLessThanOrEqual(160);
+    expect(meta.endsWith('…')).toBe(true);
+  });
+
+  it('pads short provider descriptions with the fallback sentence', () => {
+    const meta = providerDesc(providerWith('很短'), 'zh');
+    expect(meta).toContain('很短');
+    expect(meta).toContain('虚拟信用卡平台');
+  });
+
+  it('accepts legacy ico and svg logo keys but rejects other formats', () => {
+    expect(assertLogoKey('logos/old-logo.ico')).toBe('logos/old-logo.ico');
+    expect(assertLogoKey('logos/old-logo.svg')).toBe('logos/old-logo.svg');
+    expect(assertLogoKey(null)).toBeNull();
+    expect(() => assertLogoKey('logos/bad.txt')).toThrow();
   });
 });
 

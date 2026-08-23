@@ -108,7 +108,8 @@ export function normalizeActiveStatus(value: string): string {
 
 export function assertLogoKey(value: string | null): string | null {
   if (!value) return null;
-  if (!/^logos\/[a-z0-9-]+\.(?:png|jpg|jpeg|webp|gif)$/i.test(value)) throw new ApiError(400, 'logo_url must be a managed image key');
+  // ico/svg are accepted for legacy keys uploaded before the current format restrictions.
+  if (!/^logos\/[a-z0-9-]+\.(?:png|jpg|jpeg|webp|gif|ico|svg)$/i.test(value)) throw new ApiError(400, 'logo_url must be a managed image key');
   return value;
 }
 

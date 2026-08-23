@@ -149,7 +149,8 @@ adminApi.post('/images', async (c) => {
 
 adminApi.delete('/images/*', async (c) => {
   const key = c.req.path.replace('/api/admin/images/', '');
-  if (!/^(?:logos|content)\/[a-f0-9-]+\.(?:png|jpg|webp|gif)$/i.test(key)) throw new ApiError(400, 'Invalid managed image key');
+  // jpeg/ico/svg are included so pre-restriction legacy keys can also be cleaned up.
+  if (!/^(?:logos|content)\/[a-f0-9-]+\.(?:png|jpg|jpeg|webp|gif|ico|svg)$/i.test(key)) throw new ApiError(400, 'Invalid managed image key');
   await c.env.R2.delete(key);
   return c.json({ ok: true });
 });

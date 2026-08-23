@@ -34,7 +34,7 @@ app.use('*', async (c, next) => {
 
   const pageUrl = new URL(c.req.url);
   const pathname = pageUrl.pathname;
-  const isExempt = /^\/(?:api|images|lang)\//.test(pathname) || ['/robots.txt', '/sitemap.xml', '/favicon.ico'].includes(pathname);
+  const isExempt = /^\/(?:api|images|lang)\//.test(pathname) || ['/robots.txt', '/sitemap.xml', '/favicon.ico', '/vccdirindexnow42k7q9m3xp1w5n8z6.txt'].includes(pathname);
   // Visitors who chose English get forwarded to the /en version; crawlers without cookies see the default pages.
   if (getLang(getCookie(c, 'lang')) === 'en' && pathname !== '/en' && !pathname.startsWith('/en/') && !isExempt) {
     return c.redirect(`/en${pathname === '/' ? '' : pathname}${pageUrl.search}`, 302);
@@ -104,6 +104,9 @@ Sitemap: ${absoluteUrl(c, '/sitemap.xml')}
     },
   });
 });
+
+// IndexNow key verification: path and body are both the key, which is public by protocol design.
+app.get('/vccdirindexnow42k7q9m3xp1w5n8z6.txt', (c) => c.text('vccdirindexnow42k7q9m3xp1w5n8z6'));
 
 // ==========================================
 // Route Wiring

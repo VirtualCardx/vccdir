@@ -247,6 +247,12 @@ describe('public routing', () => {
     expect(body).toContain('Sitemap: https://www.vccdir.com/sitemap.xml');
   });
 
+  it('serves the IndexNow key verification file', async () => {
+    const response = await app.request('https://www.vccdir.com/vccdirindexnow42k7q9m3xp1w5n8z6.txt', {}, baseEnv);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('vccdirindexnow42k7q9m3xp1w5n8z6');
+  });
+
   it('serves a bilingual sitemap with hreflang alternates', async () => {
     const response = await app.request('https://www.vccdir.com/sitemap.xml', {}, { ...baseEnv, DB: mockDatabase() });
     expect(response.status).toBe(200);

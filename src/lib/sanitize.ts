@@ -40,7 +40,18 @@ export function sanitizeContentHtml(html: string): string {
 }
 
 export function contentBodyHtml(body: string): string {
-  return /<\/?[a-z][\s\S]*>/i.test(body) ? sanitizeContentHtml(body) : plainTextToHtml(body);
+  if (!/<\/?[a-z][\s\S]*>/i.test(body)) return plainTextToHtml(body);
+  const sanitized = sanitizeContentHtml(body);
+  // Wrap leading bare text so the intro paragraph gets spacing before block-level content;
+  // the "* + *" spacing rule only applies between element siblings.
+  const leading = sanitized.match(/^[^<]*/);
+  if (leading && leading[0].trim()) {
+    const rest = sanitized.slice(leading[0].length);
+    if (/^<(?:p|h2|h3|ul|ol|blockquote|hr)/i.test(rest)) {
+      return `<p>${leading[0].trim()}</p>${rest}`;
+    }
+  }
+  return sanitized;
 }
 
 export function generateSlug(text: string): string {

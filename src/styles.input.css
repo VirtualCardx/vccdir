@@ -34,6 +34,8 @@
   .metric-tile { @apply rounded-2xl border border-slate-100 bg-slate-50/80 p-4; }
   .empty-state { @apply rounded-3xl border border-dashed border-slate-300 bg-white/70 px-6 py-16 text-center text-slate-400; }
   .status-featured { @apply rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700 ring-1 ring-amber-200/70; }
+  /* First paragraph bottom edge: inline follow-ups (strong/a) cannot carry vertical margins. */
+  .content-prose p:first-child { margin-bottom: 0.75rem; }
 }
 
 .hero-float { animation: hero-float 7s ease-in-out infinite; }

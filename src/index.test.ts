@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { app } from './index';
-import { generateSlug, sanitizeContentHtml } from './lib/sanitize';
+import { generateSlug, sanitizeContentHtml, contentBodyHtml } from './lib/sanitize';
 import { pageUrl, publicPageNumber, providerDesc } from './lib/seo';
 import { assertLogoKey } from './lib/api';
 import type { Provider } from './types';
@@ -393,6 +393,14 @@ describe('content helpers', () => {
   it('builds stable pagination URLs', () => {
     expect(pageUrl('/cards', 1)).toBe('/cards');
     expect(pageUrl('/cards', 2, { q: 'visa usd' })).toBe('/cards?q=visa+usd&page=2');
+  });
+
+  it('wraps leading bare text only before block-level tags', () => {
+    expect(contentBodyHtml('平台介绍文字\n\n<p><strong>产品费率：</strong>详情</p>')).toBe(
+      '<p>平台介绍文字</p><p><strong>产品费率：</strong>详情</p>'
+    );
+    expect(contentBodyHtml('介绍\n<strong>费率</strong>说明')).toBe('介绍\n<strong>费率</strong>说明');
+    expect(contentBodyHtml('  \n<p>仅块级</p>')).toBe('  \n<p>仅块级</p>');
   });
 
   it('rejects invalid public page numbers', () => {

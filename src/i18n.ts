@@ -8,6 +8,7 @@ const translations = {
   // Navigation
   'nav.home': { zh: '首页', en: 'Home' },
   'nav.providers': { zh: '虚拟信用卡平台', en: 'VCC Platforms' },
+  'nav.cards': { zh: '卡段', en: 'Card BINs' },
   'nav.content': { zh: '行业动态', en: 'Industry News' },
   'nav.language': { zh: 'EN', en: '中文' },
 
@@ -52,8 +53,16 @@ const translations = {
   'card.provider': { zh: '所属平台', en: 'Platform' },
   'card.back_provider': { zh: '返回平台', en: 'Back to Platform' },
   'card.not_found': { zh: '卡段未找到', en: 'Card BIN not found' },
+  'card.title_suffix': { zh: '费用、用途与限制', en: 'Fees, Uses and Limits' },
   'card.closed_title': { zh: '该卡段已停用', en: 'This card BIN is no longer offered' },
   'card.closed_desc': { zh: '该卡段已停止发行或停止服务，页面信息仅作历史参考，请勿用于新的申请或充值。', en: 'This card BIN is no longer issued or serviced; the information on this page is historical reference only. Do not use it for new applications or deposits.' },
+
+  // Card Directory
+  'cards.title': { zh: '卡段与 BIN 目录', en: 'Virtual Card BIN Directory' },
+  'cards.desc': { zh: '按卡头（BIN）浏览和比较各平台在售虚拟信用卡的开卡费、充值费率、月费、币种与使用场景。', en: 'Browse and compare virtual card BINs across platforms by issuance fee, funding rate, monthly fee, currency, and use case.' },
+  'cards.search': { zh: '搜索卡号段、平台、币种或使用场景', en: 'Search BIN, platform, currency, or use case' },
+  'cards.results': { zh: '张虚拟卡', en: 'virtual cards' },
+  'cards.no_results': { zh: '没有找到匹配的虚拟信用卡', en: 'No matching virtual cards found' },
 
   // Provider Directory
   'providers.title': { zh: '虚拟卡平台目录', en: 'Virtual Card Platform Directory' },
@@ -61,6 +70,9 @@ const translations = {
   'providers.search': { zh: '搜索平台名称或地区', en: 'Search platform name or region' },
   'providers.results': { zh: '家平台', en: 'platforms' },
   'providers.no_results': { zh: '没有找到匹配的虚拟卡平台', en: 'No matching platforms found' },
+  'providers.closed_section': { zh: '已停止运营的平台', en: 'Ceased Operations' },
+  'providers.closed_hint': { zh: '历史参考，请勿新增充值或申请', en: 'Historical reference only; avoid new deposits or applications' },
+  'provider.closed_badge': { zh: '已停止运营', en: 'Ceased' },
 
   // Content
   'content.title': { zh: '行业动态', en: 'Industry News' },

@@ -1,11 +1,12 @@
-// Worker entry point: middleware, language routing, image proxy, robots, sitemap, and route wiring.
+// Worker entry point: middleware, language routing, sitemap, and route wiring.
 import { Hono } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import { getLang, langPath } from './i18n';
 import type { Env } from './types';
 import { ApiError } from './lib/api';
 import { siteOrigin, absoluteUrl } from './lib/seo';
-import { homePage, providersPage, providerPage, cardPage, contentListPage, contentDetailPage } from './pages';
+import { lookupPageCache, storePageCache } from './lib/cache';
+import { homePage, cardsPage, providersPage, providerPage, cardPage, contentListPage, contentDetailPage } from './pages';
 import { adminApi } from './admin';
 
 const app = new Hono<Env>();
@@ -14,11 +15,14 @@ const app = new Hono<Env>();
 // route both hostnames to this Worker, so normalize the bare domain here as a
 // safety net even when an edge redirect rule has not been configured yet.
 app.use('*', async (c, next) => {
-  c.header('Content-Security-Policy', "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
+  c.header('Content-Security-Policy', "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://cloudflareinsights.com; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
   c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('X-Frame-Options', 'DENY');
+  if (new URL(c.req.url).protocol === 'https:') {
+    c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  }
   const configured = c.env.SITE_URL?.replace(/\/+$/, '');
   if (configured) {
     const canonical = new URL(configured);
@@ -34,16 +38,22 @@ app.use('*', async (c, next) => {
 
   const pageUrl = new URL(c.req.url);
   const pathname = pageUrl.pathname;
-  const isExempt = /^\/(?:api|images|lang)\//.test(pathname) || ['/robots.txt', '/sitemap.xml', '/favicon.ico', '/vccdirindexnow42k7q9m3xp1w5n8z6.txt'].includes(pathname);
+  const isExempt = /^\/(?:api|images|lang)\//.test(pathname) || ['/robots.txt', '/sitemap.xml', '/favicon.ico', '/favicon.svg', '/vccdirindexnow42k7q9m3xp1w5n8z6.txt'].includes(pathname);
   // Visitors who chose English get forwarded to the /en version; crawlers without cookies see the default pages.
   if (getLang(getCookie(c, 'lang')) === 'en' && pathname !== '/en' && !pathname.startsWith('/en/') && !isExempt) {
     return c.redirect(`/en${pathname === '/' ? '' : pathname}${pageUrl.search}`, 302);
   }
 
+  // Serve cacheable public pages from the edge cache (after the language redirect).
+  const cached = await lookupPageCache(c);
+  if (cached) return cached;
+
   await next();
 
-  // Public pages vary by language, so keep HTML out of browser and edge caches.
-  if ((c.res.headers.get('Content-Type') || '').startsWith('text/html')) {
+  // Cacheable pages get public Cache-Control and are stored; other HTML stays no-cache
+  // because it varies (language cookie redirect, search variants, error states).
+  const stored = await storePageCache(c);
+  if (!stored && (c.res.headers.get('Content-Type') || '').startsWith('text/html')) {
     c.res.headers.set('Cache-Control', 'no-cache');
   }
 });
@@ -100,13 +110,13 @@ Sitemap: ${absoluteUrl(c, '/sitemap.xml')}
   return new Response(body, {
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': 'public, max-age=600',
     },
   });
 });
 
 // IndexNow key verification: path and body are both the key, which is public by protocol design.
-app.get('/vccdirindexnow42k7q9m3xp1w5n8z6.txt', (c) => c.text('vccdirindexnow42k7q9m3xp1w5n8z6'));
+app.get('/vccdirindexnow42k7q9m3xp1w5n8z6.txt', (c) => c.text('vccdirindexnow42k7q9m3xp1w5n8z6', 200, { 'Cache-Control': 'no-store' }));
 
 // ==========================================
 // Route Wiring
@@ -116,9 +126,8 @@ app.route('/api/admin', adminApi);
 app.get('/', homePage);
 app.get('/en', homePage);
 app.get('/en/', homePage);
-// The card BIN directory was removed; keep its link equity flowing to the platform directory.
-app.get('/cards', (c) => c.redirect('/providers', 301));
-app.get('/en/cards', (c) => c.redirect('/en/providers', 301));
+app.get('/cards', cardsPage);
+app.get('/en/cards', cardsPage);
 app.get('/providers', providersPage);
 app.get('/en/providers', providersPage);
 app.get('/provider/:slug', providerPage);
@@ -174,6 +183,7 @@ app.get('/sitemap.xml', async (c) => {
   const urls: string[] = [
     urlEntry('/', 'daily', '1.0'),
     urlEntry('/providers', 'weekly', '0.9'),
+    urlEntry('/cards', 'daily', '0.9'),
   ];
 
   // Inactive providers stay listed at low priority so their stopped-operating warnings stay discoverable.

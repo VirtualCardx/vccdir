@@ -35,10 +35,13 @@ CREATE TABLE IF NOT EXISTS vcc_cards (
   quota TEXT,
   usage TEXT,
   description TEXT,
+  description_zh TEXT,
+  description_en TEXT,
   status TEXT DEFAULT 'active',
   is_featured INTEGER NOT NULL DEFAULT 0,
   slug TEXT NOT NULL UNIQUE,
   created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (provider_id) REFERENCES vcc_providers(id) ON DELETE CASCADE
 );
 

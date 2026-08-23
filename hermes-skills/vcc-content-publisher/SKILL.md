@@ -9,7 +9,7 @@ Maintain `https://www.vccdir.com` only through `/api/admin/*`. The website has n
 
 ## Public Site
 
-Public pages: `/providers` (platform directory), `/provider/{slug}` (platform with its card BINs), `/card/{slug}`, `/content`, and `/content/{slug}`. The former `/cards` BIN directory was removed and 301-redirects to `/providers`. Chinese pages are unprefixed; English versions live under `/en/` with the same paths and render from the same records. The homepage shows a platforms section (most recently updated first, up to nine) and featured and latest articles.
+Public pages: `/providers` (platform directory), `/provider/{slug}` (platform with its card BINs), `/cards` (card BIN directory), `/card/{slug}`, `/content`, and `/content/{slug}`. Chinese pages are unprefixed; English versions live under `/en/` with the same paths and render from the same records. The homepage shows a platforms section (most recently updated first, up to nine) and featured and latest articles; the first `/providers` page lists ceased platforms separately at the bottom.
 
 ## Authentication
 
@@ -104,7 +104,7 @@ PUT    /api/admin/cards/{id}
 DELETE /api/admin/cards/{id}
 ```
 
-Create requires `provider_id`, `bin` (6–19 digits), and `card_type`. Other fields are `slug`, three-letter `currency`, `issuance_fee`, `fee_rate`, `monthly_fee`, `initial_load`, `quota`, `usage`, `description`, `status`, and `is_featured` (`0` or `1`). Featured active cards appear in the curated homepage section.
+Create requires `provider_id`, `bin` (6–19 digits), and `card_type`. Other fields are `slug`, three-letter `currency`, `issuance_fee`, `fee_rate`, `monthly_fee`, `initial_load`, `quota`, `usage`, `description` (legacy), `description_zh`, `description_en`, `status`, and `is_featured` (`0` or `1`). Featured active cards appear first in the `/cards` BIN directory. Prefer `description_zh`/`description_en` for bilingual content; the legacy `description` is only a fallback and is ignored once the language-specific field is set. An update refreshes `updated_at`, which drives BIN directory ordering.
 
 ## Tags
 

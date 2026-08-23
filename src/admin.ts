@@ -9,10 +9,20 @@ import {
   detectImageType, numberArrayField,
 } from './lib/api';
 import { apiProvidersWithTags, updateProviderTags, validateTagIds } from './lib/db';
-import { absoluteUrl } from './lib/seo';
+import { absoluteUrl, siteOrigin } from './lib/seo';
 import { generateSlug } from './lib/sanitize';
+import { purgeProviderUpdate, purgeCardUpdate, purgeContentUpdate, purgeTagUpdate } from './lib/cache';
 
 export const adminApi = new Hono<Env>();
+
+// Cache purging is best-effort: a purge failure must not fail an already-committed mutation.
+const purge = async (run: () => Promise<void>) => {
+  try {
+    await run();
+  } catch (error) {
+    console.error('cache purge failed', error);
+  }
+};
 
 adminApi.use('*', bodyLimit({
   // 2 MiB file limit plus headroom for multipart framing so near-limit images are not rejected here.
@@ -82,6 +92,7 @@ adminApi.post('/content', async (c) => {
   ).run();
 
   const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(result.meta.last_row_id).first<ContentPost>();
+  await purge(() => purgeContentUpdate(c.env.DB, siteOrigin(c), [slug]));
   return c.json(post, 201);
 });
 
@@ -100,13 +111,14 @@ adminApi.put('/content/:id', async (c) => {
   const bodyZh = stringField(body, 'body_zh', existing.body_zh);
   const bodyEn = stringField(body, 'body_en', existing.body_en);
   if (!titleZh || !titleEn || !bodyZh || !bodyEn) throw new ApiError(400, 'Bilingual titles and bodies cannot be empty');
+  const newSlug = assertSlug(stringField(body, 'slug', existing.slug));
 
   await c.env.DB.prepare(
     `UPDATE content_posts SET title_zh = ?, title_en = ?, slug = ?, excerpt_zh = ?, excerpt_en = ?, body_zh = ?, body_en = ?, status = ?, is_featured = ?, featured_image_url = ?, published_at = ?, updated_at = datetime('now') WHERE id = ?`
   ).bind(
     titleZh,
     titleEn,
-    assertSlug(stringField(body, 'slug', existing.slug)),
+    newSlug,
     patchedNullableString(body, 'excerpt_zh', existing.excerpt_zh),
     patchedNullableString(body, 'excerpt_en', existing.excerpt_en),
     bodyZh,
@@ -119,11 +131,15 @@ adminApi.put('/content/:id', async (c) => {
   ).run();
 
   const post = await c.env.DB.prepare('SELECT * FROM content_posts WHERE id = ?').bind(id).first<ContentPost>();
+  await purge(() => purgeContentUpdate(c.env.DB, siteOrigin(c), [existing.slug, post?.slug].filter((s): s is string => Boolean(s))));
   return c.json(post);
 });
 
 adminApi.delete('/content/:id', async (c) => {
-  await c.env.DB.prepare('DELETE FROM content_posts WHERE id = ?').bind(c.req.param('id')).run();
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare('SELECT slug FROM content_posts WHERE id = ?').bind(id).first<{ slug: string }>();
+  await c.env.DB.prepare('DELETE FROM content_posts WHERE id = ?').bind(id).run();
+  if (existing) await purge(() => purgeContentUpdate(c.env.DB, siteOrigin(c), [existing.slug]));
   return c.json({ ok: true });
 });
 
@@ -207,6 +223,7 @@ adminApi.post('/providers', async (c) => {
   const providerId = Number(result.meta.last_row_id);
   await updateProviderTags(c.env.DB, providerId, tagIds);
   const provider = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(providerId).first<Provider>();
+  await purge(() => purgeProviderUpdate(c.env.DB, siteOrigin(c), [slug]));
   return c.json(provider ? (await apiProvidersWithTags(c.env.DB, [provider]))[0] : null, 201);
 });
 
@@ -221,6 +238,7 @@ adminApi.put('/providers/:id', async (c) => {
   const tagIds = numberArrayField(body, 'tag_ids');
   if (tagIds) await validateTagIds(c.env.DB, tagIds);
   if (!nameZh || !nameEn) throw new ApiError(400, 'Bilingual provider names cannot be empty');
+  const newSlug = assertSlug(stringField(body, 'slug', existing.slug));
   const update = c.env.DB.prepare(
     `UPDATE vcc_providers SET name_zh = ?, name_en = ?, website = ?, founded_date = ?, apply_method = ?, desc_zh = ?, desc_en = ?, need_kyc = ?, region = ?, status = ?, logo_url = ?, slug = ?, updated_at = datetime('now') WHERE id = ?`
   ).bind(
@@ -235,7 +253,7 @@ adminApi.put('/providers/:id', async (c) => {
     patchedNullableString(body, 'region', existing.region),
     normalizeActiveStatus(stringField(body, 'status', existing.status)),
     assertLogoKey(patchedNullableString(body, 'logo_url', existing.logo_url)),
-    assertSlug(stringField(body, 'slug', existing.slug)),
+    newSlug,
     id
   );
 
@@ -249,16 +267,24 @@ adminApi.put('/providers/:id', async (c) => {
     await update.run();
   }
   const provider = await c.env.DB.prepare('SELECT * FROM vcc_providers WHERE id = ?').bind(id).first<Provider>();
+  await purge(() => purgeProviderUpdate(c.env.DB, siteOrigin(c), [existing.slug, newSlug]));
   return c.json(provider ? (await apiProvidersWithTags(c.env.DB, [provider]))[0] : null);
 });
 
 adminApi.delete('/providers/:id', async (c) => {
   const id = c.req.param('id');
+  const existing = await c.env.DB.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(id).first<{ slug: string }>();
+  const cardSlugs = await c.env.DB.prepare('SELECT slug FROM vcc_cards WHERE provider_id = ?').bind(id).all<{ slug: string }>();
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM vcc_provider_tags WHERE provider_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM vcc_cards WHERE provider_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM vcc_providers WHERE id = ?').bind(id),
   ]);
+  if (existing) {
+    const origin = siteOrigin(c);
+    await purge(() => purgeProviderUpdate(c.env.DB, origin, [existing.slug]));
+    await purge(() => purgeCardUpdate(c.env.DB, origin, cardSlugs.results.map((row) => row.slug), [existing.slug]));
+  }
   return c.json({ ok: true });
 });
 
@@ -315,7 +341,7 @@ adminApi.post('/cards', async (c) => {
   if (!/^[A-Z]{3}$/.test(currency)) throw new ApiError(400, 'currency must be a three-letter code');
 
   const result = await c.env.DB.prepare(
-    'INSERT INTO vcc_cards (provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, status, is_featured, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO vcc_cards (provider_id, bin, card_type, currency, issuance_fee, fee_rate, monthly_fee, initial_load, quota, usage, description, description_zh, description_en, status, is_featured, slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
     providerId,
     bin,
@@ -328,12 +354,15 @@ adminApi.post('/cards', async (c) => {
     nullableStringField(body, 'quota'),
     nullableStringField(body, 'usage'),
     nullableStringField(body, 'description'),
+    nullableStringField(body, 'description_zh'),
+    nullableStringField(body, 'description_en'),
     normalizeActiveStatus(stringField(body, 'status')),
     binaryFlagField(body, 'is_featured', 0),
     slug
   ).run();
 
   const card = await c.env.DB.prepare('SELECT * FROM vcc_cards WHERE id = ?').bind(result.meta.last_row_id).first<Card>();
+  await purge(() => purgeCardUpdate(c.env.DB, siteOrigin(c), [slug], [provider.slug]));
   return c.json(card, 201);
 });
 
@@ -345,14 +374,16 @@ adminApi.put('/cards/:id', async (c) => {
   const body = await parseJsonBody(c);
   const providerId = optionalNumberField(body, 'provider_id') ?? existing.provider_id;
   if (!Number.isInteger(providerId) || providerId < 1) throw new ApiError(400, 'provider_id must be a positive integer');
-  const provider = await c.env.DB.prepare('SELECT id FROM vcc_providers WHERE id = ?').bind(providerId).first<{ id: number }>();
+  const provider = await c.env.DB.prepare('SELECT id, slug FROM vcc_providers WHERE id = ?').bind(providerId).first<{ id: number; slug: string }>();
   if (!provider) throw new ApiError(400, 'provider_id does not exist');
+  const previousProvider = await c.env.DB.prepare('SELECT slug FROM vcc_providers WHERE id = ?').bind(existing.provider_id).first<{ slug: string }>();
   const bin = stringField(body, 'bin', existing.bin);
   if (!/^\d{6,19}$/.test(bin)) throw new ApiError(400, 'bin must contain 6 to 19 digits');
   const currency = stringField(body, 'currency', existing.currency).toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) throw new ApiError(400, 'currency must be a three-letter code');
+  const newSlug = assertSlug(stringField(body, 'slug', existing.slug));
   await c.env.DB.prepare(
-    'UPDATE vcc_cards SET provider_id = ?, bin = ?, card_type = ?, currency = ?, issuance_fee = ?, fee_rate = ?, monthly_fee = ?, initial_load = ?, quota = ?, usage = ?, description = ?, status = ?, is_featured = ?, slug = ? WHERE id = ?'
+    `UPDATE vcc_cards SET provider_id = ?, bin = ?, card_type = ?, currency = ?, issuance_fee = ?, fee_rate = ?, monthly_fee = ?, initial_load = ?, quota = ?, usage = ?, description = ?, description_zh = ?, description_en = ?, status = ?, is_featured = ?, slug = ?, updated_at = datetime('now') WHERE id = ?`
   ).bind(
     providerId,
     bin,
@@ -365,18 +396,31 @@ adminApi.put('/cards/:id', async (c) => {
     patchedNullableString(body, 'quota', existing.quota),
     patchedNullableString(body, 'usage', existing.usage),
     patchedNullableString(body, 'description', existing.description),
+    patchedNullableString(body, 'description_zh', existing.description_zh ?? null),
+    patchedNullableString(body, 'description_en', existing.description_en ?? null),
     normalizeActiveStatus(stringField(body, 'status', existing.status)),
     binaryFlagField(body, 'is_featured', existing.is_featured),
-    assertSlug(stringField(body, 'slug', existing.slug)),
+    newSlug,
     id
   ).run();
 
   const card = await c.env.DB.prepare('SELECT * FROM vcc_cards WHERE id = ?').bind(id).first<Card>();
+  await purge(() => purgeCardUpdate(
+    c.env.DB,
+    siteOrigin(c),
+    [existing.slug, newSlug],
+    [previousProvider?.slug, provider.slug].filter((s): s is string => Boolean(s))
+  ));
   return c.json(card);
 });
 
 adminApi.delete('/cards/:id', async (c) => {
-  await c.env.DB.prepare('DELETE FROM vcc_cards WHERE id = ?').bind(c.req.param('id')).run();
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare(
+    'SELECT c.slug, p.slug AS provider_slug FROM vcc_cards c INNER JOIN vcc_providers p ON p.id = c.provider_id WHERE c.id = ?'
+  ).bind(id).first<{ slug: string; provider_slug: string }>();
+  await c.env.DB.prepare('DELETE FROM vcc_cards WHERE id = ?').bind(id).run();
+  if (existing) await purge(() => purgeCardUpdate(c.env.DB, siteOrigin(c), [existing.slug], [existing.provider_slug]));
   return c.json({ ok: true });
 });
 
@@ -402,6 +446,7 @@ adminApi.post('/tags', async (c) => {
     nullableStringField(body, 'category')
   ).run();
   const tag = await c.env.DB.prepare('SELECT * FROM vcc_tags WHERE id = ?').bind(result.meta.last_row_id).first<Tag>();
+  await purge(() => purgeTagUpdate(c.env.DB, siteOrigin(c)));
   return c.json(tag, 201);
 });
 
@@ -418,6 +463,7 @@ adminApi.put('/tags/:id', async (c) => {
     id
   ).run();
   const tag = await c.env.DB.prepare('SELECT * FROM vcc_tags WHERE id = ?').bind(id).first<Tag>();
+  await purge(() => purgeTagUpdate(c.env.DB, siteOrigin(c)));
   return c.json(tag);
 });
 
@@ -427,5 +473,6 @@ adminApi.delete('/tags/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM vcc_provider_tags WHERE tag_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM vcc_tags WHERE id = ?').bind(id),
   ]);
+  await purge(() => purgeTagUpdate(c.env.DB, siteOrigin(c)));
   return c.json({ ok: true });
 });

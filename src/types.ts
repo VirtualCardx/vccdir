@@ -33,10 +33,13 @@ export interface Card {
   quota: string | null;
   usage: string | null;
   description: string | null;
+  description_zh: string | null;
+  description_en: string | null;
   status: string;
   is_featured: number;
   slug: string;
   created_at: string;
+  updated_at: string | null;
 }
 
 export interface CardWithProvider extends Card {

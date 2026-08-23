@@ -1,4 +1,5 @@
 import type { Child } from 'hono/jsx';
+import { raw } from 'hono/html';
 import type { Lang } from './types';
 import { t, langPath } from './i18n';
 import styles from './styles.css';
@@ -7,7 +8,7 @@ interface LayoutProps {
   title: string;
   description?: string;
   lang: Lang;
-  active?: 'home' | 'providers' | 'content';
+  active?: 'home' | 'providers' | 'cards' | 'content';
   canonicalUrl?: string;
   alternates?: { zh: string; en: string };
   noIndex?: boolean;
@@ -29,11 +30,13 @@ export function Layout({ title, description, lang, active, canonicalUrl, alterna
   const serializedJsonLd = jsonLd
     ? JSON.stringify(jsonLd).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')
     : '';
-  const navLink = (key: 'home' | 'providers' | 'content', extra = '') =>
+  const navLink = (key: 'home' | 'providers' | 'cards' | 'content', extra = '') =>
     `rounded-xl px-2.5 py-2 text-xs font-semibold sm:px-3 sm:text-sm transition-colors ${active === key ? 'bg-white text-brand-600 shadow-sm' : 'text-slate-600 hover:bg-white hover:text-brand-600 hover:shadow-sm'} ${extra}`;
 
   return (
-    <html lang={lang === 'zh' ? 'zh-CN' : 'en'}>
+    <>
+      {raw('<!doctype html>')}
+      <html lang={lang === 'zh' ? 'zh-CN' : 'en'}>
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -95,6 +98,7 @@ export function Layout({ title, description, lang, active, canonicalUrl, alterna
                 <div class="flex items-center rounded-2xl border border-slate-200/70 bg-slate-50/80 p-1">
                   <a href={langPath(lang, '/')} class={navLink('home', 'hidden px-3 text-sm sm:block')}>{t('nav.home', lang)}</a>
                   <a href={langPath(lang, '/providers')} class={navLink('providers')}>{t('nav.providers', lang)}</a>
+                  <a href={langPath(lang, '/cards')} class={navLink('cards')}>{t('nav.cards', lang)}</a>
                   <a href={langPath(lang, '/content')} class={navLink('content')}>{t('nav.content', lang)}</a>
                 </div>
                 <a
@@ -119,12 +123,13 @@ export function Layout({ title, description, lang, active, canonicalUrl, alterna
             <div class="absolute -right-24 -top-28 h-72 w-72 rounded-full bg-brand-600/10 blur-3xl"></div>
             <div class="relative flex flex-col gap-10 sm:flex-row sm:items-end sm:justify-between">
               <div class="max-w-lg"><div class="mb-4 flex items-center gap-3"><img src="/logo.svg" alt={t('site.title', lang)} width="40" height="40" class="h-10 w-10 rounded-2xl shadow-lg shadow-brand-950/30" /><div><span class="block font-bold text-white">VCC Directory</span><span class="block text-xs text-slate-500">Virtual card intelligence</span></div></div><p class="text-sm leading-6 text-slate-400">{t('footer.text', lang)}</p></div>
-              <div class="flex flex-wrap gap-x-7 gap-y-3 text-sm font-semibold"><a href={langPath(lang, '/')} class="hover:text-white">{t('nav.home', lang)}</a><a href={langPath(lang, '/providers')} class="hover:text-white">{t('nav.providers', lang)}</a><a href={langPath(lang, '/content')} class="hover:text-white">{t('nav.content', lang)}</a><a href={switchUrl} class="hover:text-white">{t('nav.language', lang)}</a></div>
+              <div class="flex flex-wrap gap-x-7 gap-y-3 text-sm font-semibold"><a href={langPath(lang, '/')} class="hover:text-white">{t('nav.home', lang)}</a><a href={langPath(lang, '/providers')} class="hover:text-white">{t('nav.providers', lang)}</a><a href={langPath(lang, '/cards')} class="hover:text-white">{t('nav.cards', lang)}</a><a href={langPath(lang, '/content')} class="hover:text-white">{t('nav.content', lang)}</a><a href={switchUrl} class="hover:text-white">{t('nav.language', lang)}</a></div>
             </div>
             <div class="mt-8 border-t border-slate-800 pt-6 text-xs text-slate-500">&copy; {new Date().getFullYear()} VCC Directory</div>
           </div>
         </footer>
       </body>
     </html>
+    </>
   );
 }

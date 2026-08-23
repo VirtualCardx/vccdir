@@ -66,15 +66,27 @@ export function providerDesc(p: Provider, lang: Lang): string {
   return clampMetaDescription(description);
 }
 
-export function cardMetaDescription(card: CardWithProvider, lang: Lang): string {
-  const description = metaPlainText(card.description || '');
+// Bilingual card description: prefer the language field, fall back to the legacy column.
+export function cardDescription(card: { description: string | null; description_zh: string | null; description_en: string | null }, lang: Lang): string {
+  const localized = (lang === 'zh' ? card.description_zh : card.description_en)?.trim();
+  return localized || card.description?.trim() || '';
+}
+
+export function cardDetailTitle(card: CardWithProvider, lang: Lang): string {
   const name = lang === 'zh' ? card.provider_name_zh : card.provider_name_en;
+  return lang === 'zh'
+    ? `${name} ${card.card_type} ${card.bin}：${t('card.title_suffix', lang)}`
+    : `${name} ${card.card_type} ${card.bin}: ${t('card.title_suffix', lang)}`;
+}
+
+export function cardMetaDescription(card: CardWithProvider, lang: Lang): string {
+  const name = lang === 'zh' ? card.provider_name_zh : card.provider_name_en;
+  const description = metaPlainText(cardDescription(card, lang));
   const fallback = lang === 'zh'
     ? `了解${name} ${card.card_type} 虚拟卡（BIN ${card.bin}）的开卡费、充值费率、月费、支持币种、额度和适用场景，并与其他虚拟信用卡进行比较。`
     : `Explore the ${name} ${card.card_type} virtual card (BIN ${card.bin}), including issuance fees, funding rates, monthly costs, currency, limits, and supported use cases.`;
   if (!description) return fallback;
-  if (description.length < 70) return clampMetaDescription(`${description}${/[。.!?]$/.test(description) ? '' : '。'}${fallback}`);
-  return clampMetaDescription(description);
+  return clampMetaDescription(lang === 'zh' ? `${name}：${description}` : `${name}: ${description}`);
 }
 
 export function contentTitle(post: ContentPost, lang: Lang): string {

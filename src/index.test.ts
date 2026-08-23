@@ -55,21 +55,32 @@ describe('public routing', () => {
     const response = await app.request('https://www.vccdir.com/', {}, { ...baseEnv, DB: mockDatabase() });
     expect(response.status).toBe(200);
     const body = await response.text();
+    expect(body.startsWith('<!doctype html>')).toBe(true);
     expect(body).toContain('发现适合你的虚拟信用卡');
     expect(body).toContain('虚拟卡平台');
-    expect(body).not.toContain('浏览全部虚拟卡');
     expect(response.headers.get('Content-Security-Policy')).toContain('default-src');
-    expect(response.headers.get('Cache-Control')).toBe('no-cache');
+    expect(response.headers.get('Content-Security-Policy')).toContain('static.cloudflareinsights.com');
+    expect(response.headers.get('Strict-Transport-Security')).toBe('max-age=31536000; includeSubDomains; preload');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=60, s-maxage=600, stale-while-revalidate=86400');
   });
 
-  it('redirects the removed card directory to the platform directory', async () => {
-    const zh = await app.request('https://www.vccdir.com/cards', {}, baseEnv);
-    expect(zh.status).toBe(301);
-    expect(zh.headers.get('Location')).toBe('/providers');
+  it('serves the card BIN directory with real 404s for invalid pages', async () => {
+    const env = { ...baseEnv, DB: mockDatabase() } as CloudflareBindings;
+    const zh = await app.request('https://www.vccdir.com/cards', {}, env);
+    expect(zh.status).toBe(200);
+    const zhBody = await zh.text();
+    expect(zhBody).toContain('卡段与 BIN 目录');
+    expect(zhBody).toContain('hreflang="x-default"');
 
-    const en = await app.request('https://www.vccdir.com/en/cards', {}, baseEnv);
-    expect(en.status).toBe(301);
-    expect(en.headers.get('Location')).toBe('/en/providers');
+    const en = await app.request('https://www.vccdir.com/en/cards', {}, env);
+    expect(en.status).toBe(200);
+    expect(await en.text()).toContain('Virtual Card BIN Directory');
+
+    const invalid = await app.request('https://www.vccdir.com/cards?page=abc', {}, env);
+    expect(invalid.status).toBe(404);
+
+    const beyond = await app.request('https://www.vccdir.com/cards?page=99', {}, env);
+    expect(beyond.status).toBe(404);
   });
 
   it('serves the English homepage at /en with hreflang alternates', async () => {
@@ -135,6 +146,13 @@ describe('public routing', () => {
     expect(body).toContain('hreflang="en"');
     expect(body).toContain('"@type":"Organization"');
     expect(body).not.toContain('FinancialProduct');
+  });
+
+  it('serves the IndexNow key verification file without caching', async () => {
+    const response = await app.request('https://www.vccdir.com/vccdirindexnow42k7q9m3xp1w5n8z6.txt', {}, baseEnv);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('vccdirindexnow42k7q9m3xp1w5n8z6');
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
   });
 
   it('lists inactive providers in the sitemap at low priority', async () => {
@@ -210,6 +228,36 @@ describe('public routing', () => {
     expect(await en.text()).toContain('Virtual Card Platform Directory');
   });
 
+  it('shows a ceased-operations section on the first providers page', async () => {
+    const env = {
+      ...baseEnv,
+      DB: mockDatabase({ results: [{ slug: 'gone-provider', name_zh: '跑路平台', name_en: 'Gone', status: 'inactive', updated_at: '2026-08-01 00:00:00' }] }),
+    } as CloudflareBindings;
+    const response = await app.request('https://www.vccdir.com/providers', {}, env);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('已停止运营的平台');
+    expect(body).toContain('跑路平台');
+    expect(body).toContain('已停止运营</span>');
+  });
+
+  it('uses the bilingual card title template with the provider name', async () => {
+    const env = {
+      ...baseEnv,
+      DB: mockDatabase({
+        first: { id: 1, slug: 'privcards-531993', bin: '531993', card_type: 'Mastercard', currency: 'USD', status: 'active', provider_status: 'active', provider_slug: 'privcards', provider_name_zh: 'PrivCards', provider_name_en: 'PrivCards', description: 'legacy', description_zh: '中文卡段说明', description_en: 'English card note' },
+      }),
+    } as CloudflareBindings;
+    const response = await app.request('https://www.vccdir.com/card/privcards-531993', {}, env);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('<title>PrivCards Mastercard 531993：费用、用途与限制');
+    expect(body).toContain('中文卡段说明');
+    expect(body).not.toContain('>legacy<');
+    const meta = (body.match(/<meta name="description" content="([^"]*)"/) || [])[1] || '';
+    expect(meta.startsWith('PrivCards：')).toBe(true);
+  });
+
   it('formats multi-line provider descriptions into paragraphs', async () => {
     const env = {
       ...baseEnv,
@@ -260,12 +308,6 @@ describe('public routing', () => {
     expect(body).toContain('Sitemap: https://www.vccdir.com/sitemap.xml');
   });
 
-  it('serves the IndexNow key verification file', async () => {
-    const response = await app.request('https://www.vccdir.com/vccdirindexnow42k7q9m3xp1w5n8z6.txt', {}, baseEnv);
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('vccdirindexnow42k7q9m3xp1w5n8z6');
-  });
-
   it('serves a bilingual sitemap with hreflang alternates', async () => {
     const response = await app.request('https://www.vccdir.com/sitemap.xml', {}, { ...baseEnv, DB: mockDatabase() });
     expect(response.status).toBe(200);
@@ -274,7 +316,8 @@ describe('public routing', () => {
     expect(body).toContain('<loc>https://www.vccdir.com/</loc>');
     expect(body).toContain('<loc>https://www.vccdir.com/en</loc>');
     expect(body).toContain('<loc>https://www.vccdir.com/providers</loc>');
-    expect(body).not.toContain('/cards</loc>');
+    expect(body).toContain('<loc>https://www.vccdir.com/cards</loc>');
+    expect(body).toContain('<loc>https://www.vccdir.com/en/cards</loc>');
     expect(body).toContain('hreflang="x-default"');
   });
 });

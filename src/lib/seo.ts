@@ -32,10 +32,19 @@ export function providerName(p: Provider | { name_zh: string; name_en: string },
 }
 
 // Meta descriptions must be plain text: strip markup and clamp to search-engine lengths.
+const DECODED_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+
+function decodeEntity(entity: string): string {
+  const name = entity.toLowerCase();
+  const code = name.startsWith('#x') ? Number.parseInt(entity.slice(2), 16) : name.startsWith('#') ? Number.parseInt(entity.slice(1), 10) : NaN;
+  if (Number.isFinite(code)) return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ' ';
+  return DECODED_ENTITIES[name] ?? ' ';
+}
+
 function metaPlainText(html: string): string {
   return html
     .replace(/<[^>]*>/g, ' ')
-    .replace(/&[a-z#0-9]+;/gi, ' ')
+    .replace(/&([a-z#0-9]+);/gi, (_match, entity: string) => decodeEntity(entity))
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -53,7 +62,7 @@ export function providerDesc(p: Provider, lang: Lang): string {
     ? `查看${name}虚拟信用卡平台的开卡方式、费率、KYC要求、支持地区和可用卡段，并与其他虚拟卡平台进行对比。`
     : `Review ${name} virtual card issuance, fees, KYC requirements, supported regions, and available cards, then compare it with other VCC platforms.`;
   if (!description) return fallback;
-  if (description.length < 70) return `${description}${/[。.!?]$/.test(description) ? '' : '。'}${fallback}`;
+  if (description.length < 70) return clampMetaDescription(`${description}${/[。.!?]$/.test(description) ? '' : '。'}${fallback}`);
   return clampMetaDescription(description);
 }
 
@@ -64,7 +73,7 @@ export function cardMetaDescription(card: CardWithProvider, lang: Lang): string 
     ? `了解${name} ${card.card_type} 虚拟卡（BIN ${card.bin}）的开卡费、充值费率、月费、支持币种、额度和适用场景，并与其他虚拟信用卡进行比较。`
     : `Explore the ${name} ${card.card_type} virtual card (BIN ${card.bin}), including issuance fees, funding rates, monthly costs, currency, limits, and supported use cases.`;
   if (!description) return fallback;
-  if (description.length < 70) return `${description}${/[。.!?]$/.test(description) ? '' : '。'}${fallback}`;
+  if (description.length < 70) return clampMetaDescription(`${description}${/[。.!?]$/.test(description) ? '' : '。'}${fallback}`);
   return clampMetaDescription(description);
 }
 
@@ -79,7 +88,7 @@ export function contentExcerpt(post: ContentPost, lang: Lang): string {
     ? `深入了解${title}的费率、申请或使用方式、适用场景和注意事项，帮助你比较并选择合适的虚拟信用卡服务。`
     : `Learn about ${title}, including fees, setup or usage, suitable use cases, and important considerations when comparing virtual card services.`;
   if (!excerpt) return fallback;
-  if (excerpt.length < 70) return `${excerpt}${/[。.!?]$/.test(excerpt) ? '' : '。'}${fallback}`;
+  if (excerpt.length < 70) return clampMetaDescription(`${excerpt}${/[。.!?]$/.test(excerpt) ? '' : '。'}${fallback}`);
   return clampMetaDescription(excerpt);
 }
 

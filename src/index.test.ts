@@ -278,11 +278,32 @@ describe('meta description sanitizing', () => {
     expect(meta).toContain('虚拟信用卡平台');
   });
 
+  it('clamps the padded fallback path for English descriptions', () => {
+    const provider = { name_zh: '测试平台', name_en: 'Test Platform', desc_zh: '', desc_en: 'Short but valid description for testing.' } as unknown as Provider;
+    const meta = providerDesc(provider, 'en');
+    expect(meta.length).toBeLessThanOrEqual(160);
+    expect(meta.endsWith('…')).toBe(true);
+  });
+
+  it('decodes common HTML entities instead of dropping them', () => {
+    const meta = providerDesc(providerWith('BitGo Bank &amp; Trust 托管。'), 'zh');
+    expect(meta).toContain('BitGo Bank & Trust');
+  });
+
   it('accepts legacy ico and svg logo keys but rejects other formats', () => {
     expect(assertLogoKey('logos/old-logo.ico')).toBe('logos/old-logo.ico');
     expect(assertLogoKey('logos/old-logo.svg')).toBe('logos/old-logo.svg');
     expect(assertLogoKey(null)).toBeNull();
     expect(() => assertLogoKey('logos/bad.txt')).toThrow();
+  });
+
+  it('deletes non-UUID legacy image keys', async () => {
+    const response = await app.request('https://www.vccdir.com/api/admin/images/logos/easypay-1786273844.png', {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer a-secure-test-token' },
+    }, { ...baseEnv, DB: mockDatabase(), R2: { delete: async () => undefined } as unknown as R2Bucket });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
   });
 });
 

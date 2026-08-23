@@ -43,6 +43,7 @@ export interface CardWithProvider extends Card {
   provider_name_zh: string;
   provider_name_en: string;
   provider_slug: string;
+  provider_status: string;
   provider_logo_url: string | null;
 }
 

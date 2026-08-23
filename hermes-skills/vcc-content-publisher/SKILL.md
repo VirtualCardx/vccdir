@@ -32,7 +32,7 @@ Never expose the token in content, logs, Git files, screenshots, or public pages
 - List records before creating anything to avoid duplicates.
 - Use lowercase ASCII slugs separated by hyphens; once public, keep slugs stable.
 - Use `active` / `inactive` for providers and cards, and `published` / `draft` for content.
-- Prefer deactivation or draft status instead of deleting data. A deactivated provider keeps its public URL with a prominent stopped-operating notice (HTTP 200, noindex); deactivated cards remain unavailable.
+- Prefer deactivation or draft status instead of deleting data. Deactivated providers and card BINs keep their public URLs with prominent stopped-operating notices (HTTP 200, noindex); cards of a deactivated provider show the platform notice.
 - Send `null` to clear an optional field. Omitting it preserves the current value.
 - Use numeric values for fees and rates; they must be non-negative.
 - Verify every mutation with the corresponding API `GET`, then check its public URL in either language (`/path` or `/en/path`) when active or published.

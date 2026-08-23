@@ -55,6 +55,8 @@ const translations = {
   'card.provider': { zh: '所属平台', en: 'Platform' },
   'card.back_provider': { zh: '返回平台', en: 'Back to Platform' },
   'card.not_found': { zh: '卡段未找到', en: 'Card BIN not found' },
+  'card.closed_title': { zh: '该卡段已停用', en: 'This card BIN is no longer offered' },
+  'card.closed_desc': { zh: '该卡段已停止发行或停止服务，页面信息仅作历史参考，请勿用于新的申请或充值。', en: 'This card BIN is no longer issued or serviced; the information on this page is historical reference only. Do not use it for new applications or deposits.' },
 
   // Card Directory
   'cards.title': { zh: '虚拟信用卡目录', en: 'Virtual Card Directory' },

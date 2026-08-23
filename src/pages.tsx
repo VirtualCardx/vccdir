@@ -454,9 +454,10 @@ export async function cardPage(c: Context<Env>) {
   const db = c.env.DB;
   const slug = c.req.param('slug');
 
+  // Inactive cards (or cards of inactive providers) keep their URL and return 200 with a notice.
   const card = await db.prepare(
-    'SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en, p.slug as provider_slug, p.logo_url as provider_logo_url FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id WHERE c.slug = ? AND c.status = ? AND p.status = ?'
-  ).bind(slug, 'active', 'active').first<CardWithProvider>();
+    'SELECT c.*, p.name_zh as provider_name_zh, p.name_en as provider_name_en, p.slug as provider_slug, p.status as provider_status, p.logo_url as provider_logo_url FROM vcc_cards c INNER JOIN vcc_providers p ON c.provider_id = p.id WHERE c.slug = ?'
+  ).bind(slug).first<CardWithProvider>();
 
   if (!card) {
     return c.html(
@@ -471,8 +472,10 @@ export async function cardPage(c: Context<Env>) {
   }
 
   const pName = lang === 'zh' ? card.provider_name_zh : card.provider_name_en;
+  const providerClosed = card.provider_status !== 'active';
+  const isActive = card.status === 'active' && !providerClosed;
 
-  const jsonLd = [
+  const jsonLd = isActive ? [
     ...baseJsonLd(c, lang),
     breadcrumbJsonLd(c, [
       { name: t('nav.home', lang), path: langPath(lang, '/') },
@@ -492,10 +495,10 @@ export async function cardPage(c: Context<Env>) {
         price: card.issuance_fee,
       },
     },
-  ];
+  ] : undefined;
 
   return c.html(
-    <Layout title={`${card.card_type} ${card.bin}`} description={cardMetaDescription(card, lang)} lang={lang} active="cards" canonicalUrl={absoluteUrl(c, langPath(lang, `/card/${card.slug}`))} alternates={{ zh: absoluteUrl(c, `/card/${card.slug}`), en: absoluteUrl(c, `/en/card/${card.slug}`) }} jsonLd={jsonLd}>
+    <Layout title={`${card.card_type} ${card.bin}`} description={cardMetaDescription(card, lang)} lang={lang} active="cards" noIndex={!isActive} canonicalUrl={absoluteUrl(c, langPath(lang, `/card/${card.slug}`))} alternates={isActive ? { zh: absoluteUrl(c, `/card/${card.slug}`), en: absoluteUrl(c, `/en/card/${card.slug}`) } : undefined} jsonLd={jsonLd}>
       <div class="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
         <nav class="breadcrumb mb-7">
           <a href={langPath(lang, '/')} class="hover:text-brand-600">{t('nav.home', lang)}</a>
@@ -504,6 +507,16 @@ export async function cardPage(c: Context<Env>) {
           <span class="mx-2">/</span>
           <span class="text-slate-900">{card.bin}</span>
         </nav>
+
+        {!isActive && (
+          <div class="mb-8 flex items-start gap-3 rounded-2xl border border-amber-300/70 bg-amber-50 p-5 text-amber-900 shadow-soft" role="alert">
+            <Icon name={providerClosed ? 'shield' : 'credit-card'} class="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+            <div>
+              <p class="font-bold">{providerClosed ? t('provider.closed_title', lang) : t('card.closed_title', lang)}</p>
+              <p class="mt-1 text-sm leading-6">{providerClosed ? t('provider.closed_desc', lang) : t('card.closed_desc', lang)}</p>
+            </div>
+          </div>
+        )}
 
         <div class="surface-card p-6 sm:p-9">
           <div class="mb-8 flex items-center space-x-3">

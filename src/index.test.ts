@@ -121,19 +121,48 @@ describe('public routing', () => {
     expect(body).not.toContain('FinancialProduct');
   });
 
-  it('requires active cards and providers on public card pages', async () => {
+  it('returns 404 only for unknown cards', async () => {
     const env = {
       ...baseEnv,
       DB: mockDatabase({
         assertQuery: (query, params) => {
-          expect(query).toContain('c.status = ?');
-          expect(query).toContain('p.status = ?');
-          expect(params).toEqual(['hidden-card', 'active', 'active']);
+          expect(query).toContain('FROM vcc_cards c INNER JOIN vcc_providers p');
+          expect(query).not.toContain('c.status = ?');
+          expect(params).toEqual(['hidden-card']);
         },
       }),
     } as CloudflareBindings;
     const response = await app.request('https://www.vccdir.com/card/hidden-card', {}, env);
     expect(response.status).toBe(404);
+  });
+
+  it('serves inactive cards with a stopped-offer notice', async () => {
+    const env = {
+      ...baseEnv,
+      DB: mockDatabase({
+        first: { id: 9, slug: 'gone-bin', bin: '556150', card_type: 'Mastercard', currency: 'USD', status: 'inactive', provider_status: 'active' },
+      }),
+    } as CloudflareBindings;
+    const response = await app.request('https://www.vccdir.com/card/gone-bin', {}, env);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('该卡段已停用');
+    expect(body).toContain('noindex');
+    expect(body).not.toContain('FinancialProduct');
+  });
+
+  it('shows the platform notice when the owning provider is inactive', async () => {
+    const env = {
+      ...baseEnv,
+      DB: mockDatabase({
+        first: { id: 10, slug: 'gone-bin-2', bin: '556151', card_type: 'Visa', currency: 'USD', status: 'active', provider_status: 'inactive' },
+      }),
+    } as CloudflareBindings;
+    const response = await app.request('https://www.vccdir.com/card/gone-bin-2', {}, env);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('该平台已停止运营');
+    expect(body).toContain('noindex');
   });
 
   it('renders the content index with an empty database', async () => {

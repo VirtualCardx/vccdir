@@ -38,7 +38,9 @@ export function Layout({ title, description, lang, active, canonicalUrl, alterna
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta name="theme-color" content="#4f46e5" />
-        <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%234f46e5'/%3E%3Ctext x='32' y='43' font-family='Arial,sans-serif' font-size='26' font-weight='bold' fill='%23fff' text-anchor='middle'%3EVC%3C/text%3E%3C/svg%3E" />
+        <link rel="icon" href="/favicon.ico" sizes="32x32" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <title>{fullTitle}</title>
         <meta name="description" content={desc} />
         <meta name="robots" content={noIndex ? `noindex, ${followWhenNoIndex ? 'follow' : 'nofollow'}` : 'index, follow, max-image-preview:large'} />
@@ -86,7 +88,7 @@ export function Layout({ title, description, lang, active, canonicalUrl, alterna
           <div class="page-shell">
             <div class="flex h-[4.5rem] items-center justify-between gap-4">
               <a href={langPath(lang, '/')} class="group flex min-w-0 items-center gap-3" aria-label={t('site.title', lang)}>
-                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-sm font-black tracking-tight text-white shadow-lg shadow-brand-600/20 transition-transform group-hover:rotate-3">VC</span>
+                <img src="/logo.svg" alt={t('site.title', lang)} width="40" height="40" class="h-10 w-10 rounded-2xl shadow-lg shadow-brand-600/20 transition-transform group-hover:rotate-3" />
                 <span class="hidden min-w-0 sm:block"><span class="block truncate text-sm font-bold tracking-tight text-slate-950">VCC Directory</span><span class="block truncate text-[11px] text-slate-400">Virtual card intelligence</span></span>
               </a>
               <div class="flex items-center gap-1.5">
@@ -116,7 +118,7 @@ export function Layout({ title, description, lang, active, canonicalUrl, alterna
           <div class="page-shell relative py-12">
             <div class="absolute -right-24 -top-28 h-72 w-72 rounded-full bg-brand-600/10 blur-3xl"></div>
             <div class="relative flex flex-col gap-10 sm:flex-row sm:items-end sm:justify-between">
-              <div class="max-w-lg"><div class="mb-4 flex items-center gap-3"><span class="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-accent-500 text-xs font-black text-white shadow-lg shadow-brand-950/30">VC</span><div><span class="block font-bold text-white">VCC Directory</span><span class="block text-xs text-slate-500">Virtual card intelligence</span></div></div><p class="text-sm leading-6 text-slate-400">{t('footer.text', lang)}</p></div>
+              <div class="max-w-lg"><div class="mb-4 flex items-center gap-3"><img src="/logo.svg" alt={t('site.title', lang)} width="40" height="40" class="h-10 w-10 rounded-2xl shadow-lg shadow-brand-950/30" /><div><span class="block font-bold text-white">VCC Directory</span><span class="block text-xs text-slate-500">Virtual card intelligence</span></div></div><p class="text-sm leading-6 text-slate-400">{t('footer.text', lang)}</p></div>
               <div class="flex flex-wrap gap-x-7 gap-y-3 text-sm font-semibold"><a href={langPath(lang, '/')} class="hover:text-white">{t('nav.home', lang)}</a><a href={langPath(lang, '/providers')} class="hover:text-white">{t('nav.providers', lang)}</a><a href={langPath(lang, '/content')} class="hover:text-white">{t('nav.content', lang)}</a><a href={switchUrl} class="hover:text-white">{t('nav.language', lang)}</a></div>
             </div>
             <div class="mt-8 border-t border-slate-800 pt-6 text-xs text-slate-500">&copy; {new Date().getFullYear()} VCC Directory</div>
